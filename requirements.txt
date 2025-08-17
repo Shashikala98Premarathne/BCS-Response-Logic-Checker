@@ -1,0 +1,7 @@
+streamlit>=1.30
+pandas>=2.0
+numpy
+openpyxl>=3.1      # needed to READ .xlsx
+xlsxwriter>=3.1    # you already use this to WRITE .xlsx
+# Optional, only if you truly need to read old .xls files:
+# xlrd==1.2.0

@@ -1,4 +1,4 @@
-# BCS Survey Logic Checker — Lite (clean, rules-json)
+# BCS Survey Logic Checker — Lite (clean, rules-json, issues-only digest)
 # Streamlit app that runs row-level logic checks using your column schema only.
 # Excludes last-wave, client-sample, and desk-research inputs & checks.
 
@@ -12,15 +12,16 @@ import json
 import csv
 from io import BytesIO
 
-st.set_page_config(page_title="BCS Survey Logic Checker — Lite", layout="wide")
-st.title("📊 BCS Survey Logic Checker — Lite")
-st.caption("No cross-wave / client-sample / desk-research dependencies. Uses your schema and brand patterns. Optional custom rules JSON.")
+st.set_page_config(page_title="BCS Survey Logic Checker", layout="wide")
+st.title("📊 BCS Survey Logic Checker")
+st.caption(" Uses the defined schema and brand patterns. Optional custom rules JSON. Outputs a clean issues-only digest.")
 
 # ----------------------------
 # Robust file reading helpers (CSV + Excel, encoding & delimiter auto)
 # ----------------------------
 COMMON_ENCODINGS = ["utf-8", "utf-8-sig", "cp1252", "latin-1"]
 ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")  # .xlsx/.zip magic
+
 
 def _sniff_sep(sample_text: str) -> str:
     try:
@@ -29,8 +30,10 @@ def _sniff_sep(sample_text: str) -> str:
     except Exception:
         return ","  # fallback
 
+
 def _norm_delim(sel: str) -> str:
     return {"\\t": "\t"}.get(sel, sel)
+
 
 def read_any_table(uploaded_file, enc_override="auto", delim_override="auto", skip_bad=True) -> pd.DataFrame:
     name = (uploaded_file.name or "").lower()
@@ -39,7 +42,7 @@ def read_any_table(uploaded_file, enc_override="auto", delim_override="auto", sk
     # 1) If it's actually an Excel (xlsx) by signature, or extension says xlsx/xls
     if raw.startswith(ZIP_SIGNATURES) or name.endswith((".xlsx", ".xls")):
         uploaded_file.seek(0)
-        return pd.read_excel(uploaded_file)  # note: .xls may require xlrd installed
+        return pd.read_excel(uploaded_file)  # .xls may need xlrd if you ever use it
 
     # 2) CSV path with encoding attempts
     encodings = COMMON_ENCODINGS if enc_override == "auto" else [enc_override]
@@ -61,6 +64,7 @@ def read_any_table(uploaded_file, enc_override="auto", delim_override="auto", sk
         kwargs["on_bad_lines"] = "skip"
     return pd.read_csv(BytesIO(raw), **kwargs)
 
+
 # ----------------------------
 # Upload
 # ----------------------------
@@ -79,8 +83,13 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Thresholds")
     a1a_cap = st.slider("Max #brands in unaided awareness (A1a)", 3, 25, 8)
-    close_min = st.slider("C-close minimum when intent is strong", 5, 10, 8)
+    close_min = st.slider("C-close 'high intent' minimum (B2=5 or preferred ⇒ ≥this)", 6, 10, 8)
     cfunc_hi = st.slider("Cfunc (performance) 'high' threshold when B2 is low", 4, 10, 6)
+
+    st.caption("Note: when B2=4 or a brand is merely considered, we use a softer closeness minimum of (this − 1), floored at 5.")
+
+    st.markdown("---")
+    show_full = st.checkbox("Show full result table (not just issues)", value=False)
 
 if not data_file:
     st.info("Upload a CSV/XLSX to begin.")
@@ -95,30 +104,36 @@ except Exception as e:
 
 res = df.copy()
 
+# Tiered C-close thresholds derived from the slider
+min_hi = int(close_min)                 # for B2=5 or preferred
+min_lo = max(5, int(close_min) - 1)     # for B2=4 or considered (floored at 5)
+
 # ----------------------------
 # Helpers & mappings (from your schema)
 # ----------------------------
 PREFIX = {
-    "awareness": "unaided_aware_",      # A1a multi (0/1)
-    "usage": "usage_",                  # A2a multi (0/1)
-    "impression": "overall_impression_",# B2 1–5
-    "consider": "consideration_",       # B3a multi (0/1)
-    "close": "closeness_",              # C-close 1–10
-    "cfunc": "performance_",            # Cfunc 1–10 in this study
+    "awareness": "unaided_aware_",       # A1a multi (0/1)
+    "usage": "usage_",                   # A2a multi (0/1)
+    "impression": "overall_impression_", # B2 1–5
+    "consider": "consideration_",        # B3a multi (0/1)
+    "close": "closeness_",               # C-close 1–10
+    "cfunc": "performance_",             # Cfunc 1–10
+    "familiarity": "familiarity_",       # B1 1–5
 }
 
 COL = {
-    "main_brand": "main_brand",                 # A2b (preferred of A2a)
-    "pref_future_single": "preference",         # B3b single pick (brand code or label)
-    "E1_overall": "overall_satisfaction",       # E1 (1–5)
+    "main_brand": "main_brand",                    # A2b (preferred of A2a)
+    "pref_future_single": "preference",            # B3b single pick (brand code or label)
+    "E1_overall": "overall_satisfaction",          # E1 (1–5)
     "E4_choose_brand": "likelihood_choose_brand",  # E4 (1–5)
+    "E4c_pref_strength": "preference_strength",    # E4c (1–5)
 }
 
 S = {
-    "HD_count": "n_heavy_duty_trucks",   # S3
-    "Tractors": "n_tractors",            # S3a1 (Korea only)
-    "Rigids": "n_rigids",                # S3a2 (Korea only)
-    "Tippers": "n_tippers",              # S3a3 (Korea only)
+    "HD_count": "n_heavy_duty_trucks",     # S3
+    "Tractors": "n_tractors",              # S3a1 (Korea only)
+    "Rigids": "n_rigids",                  # S3a2 (Korea only)
+    "Tippers": "n_tippers",                # S3a3 (Korea only)
     "LastPurchaseHD_cat": "last_purchase_hdt",   # S4a1 coded 1..9
 }
 
@@ -136,6 +151,7 @@ BRAND_NAME_TO_CODE = {
     "sany": "49", "shacman": "50", "powerland": "51", "powerstar": "52", "howo": "53", "hitachi": "54",
     "quester": "55", "lgmg": "56", "liugong": "57", "other": "98",
 }
+CODE_TO_BRAND = {v: k.title() for k, v in BRAND_NAME_TO_CODE.items()}
 
 BRAND_SUFFIX_RE = re.compile(r"_b(?P<brand>\d+)$", re.IGNORECASE)
 
@@ -155,15 +171,18 @@ getb = lambda mapping, b: mapping.get(str(b))
 def to_num(x):
     return pd.to_numeric(x, errors="coerce")
 
+
 def boolish(x) -> bool:
     s = str(x).strip().lower()
     return s in {"1", "true", "t", "yes", "y"}
+
 
 def in_vals(x, allowed: List[int]) -> bool:
     try:
         return int(float(x)) in allowed
     except Exception:
         return False
+
 
 def parse_brand_id(val) -> str | None:
     """Return brand code as string (e.g., '38') from code like 38 / 'b38',
@@ -181,6 +200,7 @@ def parse_brand_id(val) -> str | None:
         return BRAND_NAME_TO_CODE[sl]
     sl2 = re.sub(r"\s+", " ", sl.replace("-", " ").replace("/", "/"))
     return BRAND_NAME_TO_CODE.get(sl2)
+
 
 # ----- Optional custom rules JSON (from Rule Builder) -----
 def apply_custom_rules(df: pd.DataFrame, res: pd.DataFrame, rules: dict | None) -> pd.DataFrame:
@@ -235,23 +255,35 @@ def apply_custom_rules(df: pd.DataFrame, res: pd.DataFrame, rules: dict | None) 
                 res.loc[bad, name_bid] = msg
     return res
 
-# ----------------------------
-# Checks (Lite set)
-# ----------------------------
-# 0) Structural: S3a1-3 sum equals S3 (if all exist)
-if all(k in df.columns for k in [S["HD_count"], S["Tractors"], S["Rigids"], S["Tippers"]]):
-    res["CHK_S3a_sum"] = "OK"
-    subsum = to_num(df[S["Tractors"]]).fillna(0) + to_num(df[S["Rigids"]]).fillna(0) + to_num(df[S["Tippers"]]).fillna(0)
-    total = to_num(df[S["HD_count"]])
-    res.loc[(total.notna()) & (subsum != total), "CHK_S3a_sum"] = "S3a1-3 ≠ S3"
 
-# 3) A1a total sanity (awareness) + cap
+# ----------------------------
+# Checks (Lite set + extras)
+# ----------------------------
+# 0) Structural: S3a1-3 sum equals S3 (only if any S3a value present)
+if all(k in df.columns for k in [S["HD_count"], S["Tractors"], S["Rigids"], S["Tippers"]]):
+    parts = pd.DataFrame({
+        "tractors": to_num(df[S["Tractors"]]),
+        "rigids":   to_num(df[S["Rigids"]]),
+        "tippers":  to_num(df[S["Tippers"]]),
+    })
+    has_any_s3a = parts.notna().any(axis=1)
+    subsum = parts.fillna(0).sum(axis=1)
+    total = to_num(df[S["HD_count"]])
+    res["CHK_S3a_sum"] = "OK"
+    res.loc[has_any_s3a & total.notna() & (subsum != total), "CHK_S3a_sum"] = "S3a1-3 ≠ S3"
+
+# 3) A1a total sanity (awareness) + cap + S3 sanity
 aw_cols = list(brand_cols["awareness"].values())
 if aw_cols:
     sel_aw = df[aw_cols].applymap(boolish)
     count_aw = sel_aw.sum(axis=1)
     res["CHK_A1a_total_count"] = count_aw
     res["CHK_A1a_total_flag"] = np.where(count_aw > a1a_cap, f">{a1a_cap} brands", "OK")
+    # A1a vs S3 (awareness shouldn’t wildly exceed fleet size)
+    if S["HD_count"] in df.columns:
+        s3 = to_num(df[S["HD_count"]]).fillna(0)
+        allowed = np.maximum(a1a_cap, np.minimum(25, s3 + 2))
+        res.loc[count_aw > allowed, "CHK_A1a_vs_S3"] = "Too many brands vs fleet size"
 
 # 4) Main make (A2b) must be in A1a and A2a
 if COL["main_brand"] in df.columns:
@@ -294,6 +326,21 @@ if brand_cols["consider"] and brand_cols["impression"]:
         res[name] = "OK"
         res.loc[bad, name] = "B2 should be 4/5"
 
+# 8b) B1 familiarity checks: used ⇒ B1≥4; aware ⇒ B1 not 1/2
+if brand_cols.get("familiarity"):
+    for b in brands:
+        fcol = getb(brand_cols["familiarity"], b)
+        acol = getb(brand_cols["awareness"], b)
+        ucol = getb(brand_cols["usage"], b)
+        if fcol and ucol and (fcol in df.columns):
+            used = df[ucol].apply(boolish) if ucol else pd.Series(False, index=df.index)
+            bad = used & ~df[fcol].apply(lambda x: in_vals(x, [4, 5]))
+            res.loc[bad, f"CHK_B1_low_for_used_b{b}"] = "Used brand but familiarity <4"
+        if fcol and acol and (fcol in df.columns):
+            aware = df[acol].apply(boolish) if acol else pd.Series(False, index=df.index)
+            bad2 = aware & df[fcol].apply(lambda x: in_vals(x, [1, 2]))
+            res.loc[bad2, f"CHK_B1_low_for_aware_b{b}"] = "Aware but familiarity too low"
+
 # 9) If preferred for next purchase (B3b single), B2 for that brand should be 4/5
 if COL["pref_future_single"] in df.columns and brand_cols["impression"]:
     pref = df[COL["pref_future_single"]].apply(parse_brand_id)
@@ -308,21 +355,33 @@ if COL["pref_future_single"] in df.columns and brand_cols["impression"]:
         if not in_vals(df.at[idx, icol], [4, 5]):
             res.loc[idx, name] = "B2 should be 4/5 for preferred brand"
 
-# 10) C-close high when strong intent/impression
+# 10) C-close expectations: tiered thresholds (no double-flagging)
 if brand_cols["close"]:
+    pref_series = None
+    if COL.get("pref_future_single") in df.columns:
+        pref_series = df[COL["pref_future_single"]].apply(parse_brand_id)
+
     for b in brands:
         ccol = getb(brand_cols["close"], b)
         if not ccol:
             continue
-        strong = pd.Series(False, index=df.index)
-        if brand_cols["consider"].get(b):
-            strong |= df[brand_cols["consider"][b]].apply(boolish)
-        if brand_cols["impression"].get(b):
-            strong |= df[brand_cols["impression"][b]].apply(lambda x: in_vals(x, [4, 5]))
-        bad = strong & ~df[ccol].apply(lambda x: in_vals(x, list(range(close_min, 11))))
-        name = f"CHK_Cclose_high_b{b}"
-        res[name] = "OK"
-        res.loc[bad, name] = f"Expect ≥{close_min}"
+        icol = getb(brand_cols["impression"], b)
+        cns  = getb(brand_cols["consider"], b)
+
+        close = to_num(df[ccol])
+        b2    = to_num(df[icol]) if icol else pd.Series(np.nan, index=df.index)
+        considered = df[cns].apply(boolish) if cns else pd.Series(False, index=df.index)
+        preferred  = (pref_series == str(b)) if pref_series is not None else pd.Series(False, index=df.index)
+
+        need_lo = (b2 == 4) | considered
+        need_hi = (b2 == 5) | preferred
+
+        # First, high bar; then soft bar for the rows that didn't already get flagged by high bar
+        mask_hi = need_hi & ~close.isin(range(min_hi, 11))
+        res.loc[mask_hi, f"CHK_Cclose_low_hi_b{b}"] = f"Expect ≥{min_hi}"
+
+        mask_lo = (~mask_hi) & need_lo & ~close.isin(range(min_lo, 11))
+        res.loc[mask_lo, f"CHK_Cclose_low_lo_b{b}"] = f"Expect ≥{min_lo}"
 
 # 11) Cfunc vs B2 alignment (avoid high cfunc when B2 low)
 if brand_cols["cfunc"] and brand_cols["impression"]:
@@ -343,19 +402,28 @@ if brand_cols["cfunc"] and brand_cols["impression"]:
         res.loc[bad, name] = "Misaligned"
 
 # 23) Straight-liners: truck_rating_*, salesdelivery_rating_*, workshop_rating_*
-for pre in ["truck_rating_", "salesdelivery_rating_", "workshop_rating_"]:
+section_labels = {
+    "truck_rating_": "Same score across all truck-rating questions",
+    "salesdelivery_rating_": "Same score across all sales & delivery questions",
+    "workshop_rating_": "Same score across all workshop questions",
+}
+for pre, human_msg in section_labels.items():
     cols = [c for c in df.columns if c.startswith(pre)]
     if cols:
         vals = df[cols].apply(pd.to_numeric, errors="coerce")
         straight = vals.nunique(axis=1) == 1
-        name = f"CHK_{pre}straightliner"
+        name = f"CHK_straightliner_{pre.rstrip('_')}"
         res[name] = "OK"
         res.loc[straight, name] = "Straight-liner"
 
 # 24) If any brand considered but E4 low → flag (coarse sanity, E4 is quota-make specific)
 if COL["E4_choose_brand"] in df.columns and brand_cols["consider"]:
     low_e4 = ~df[COL["E4_choose_brand"]].apply(lambda x: in_vals(x, [4, 5]))
-    any_consider = pd.DataFrame({b: df[col].apply(boolish) for b, col in brand_cols["consider"].items()}).any(axis=1) if brand_cols["consider"] else False
+    any_consider = (
+        pd.DataFrame({b: df[col].apply(boolish) for b, col in brand_cols["consider"].items()}).any(axis=1)
+        if brand_cols["consider"]
+        else False
+    )
     res["CHK_E4_low_with_consider"] = "OK"
     res.loc[any_consider & low_e4, "CHK_E4_low_with_consider"] = "Low E4 but considering brands"
 
@@ -367,9 +435,10 @@ if COL["E1_overall"] in df.columns and "overall_rating_truck" in df.columns:
     res.loc[(e1 - f1).abs() > 2, "CHK_E1_vs_F1"] = ">2 pts diff"
 
 # 5/16) S4a1 recent vs A3 (years-ago per brand): if S4a1 recent but no brand with ≤5 years
-A3_pre = "last_purchase_b"        # years ago (0..99 where 99=never)
+A3_pre = "last_purchase_b"  # years ago (0..99 where 99=never)
 A4_pre = "last_workshop_visit_b"  # years ago (0..99/never)
 A4b_pre = "last_workshop2_visit_b"
+
 
 def find_yearago_block(prefix: str) -> Dict[str, str]:
     m: Dict[str, str] = {}
@@ -380,12 +449,13 @@ def find_yearago_block(prefix: str) -> Dict[str, str]:
                 m[mm.group("brand")] = c
     return m
 
+
 A3 = find_yearago_block(A3_pre)
 A4 = find_yearago_block(A4_pre)
 A4b = find_yearago_block(A4b_pre)
 
 if S["LastPurchaseHD_cat"] in df.columns and A3:
-    recent_hd = df[S["LastPurchaseHD_cat"]].apply(lambda x: in_vals(x, [1,2,3,4,5,6]))
+    recent_hd = df[S["LastPurchaseHD_cat"]].apply(lambda x: in_vals(x, [1, 2, 3, 4, 5, 6]))
     any_recent_brand = pd.DataFrame({b: to_num(df[c]) for b, c in A3.items()}) <= 5
     has_recent = any_recent_brand.any(axis=1)
     res["CHK_S4a1_vs_A3"] = "OK"
@@ -404,6 +474,84 @@ if A4 and brand_cols["usage"]:
         res[name] = "OK"
         res.loc[used & never_ws, name] = "Used brand but never used workshop"
 
+# A4 vs A4b gap (>3y), excluding 99
+for b in brands:
+    s = A4.get(b)
+    p = A4b.get(b)
+    if not s or not p:
+        continue
+    sv = to_num(df[s])
+    pv = to_num(df[p])
+    mask = sv.notna() & pv.notna() & (sv != 99) & (pv != 99) & ((sv - pv).abs() > 3)
+    res.loc[mask, f"CHK_A4_vs_A4b_gap_b{b}"] = ">3y gap between service and parts visits"
+
+# G2 (operation range) vs G1 (industry) map (editable)
+INDUSTRY_G2_ALLOWED = {
+    8: [1, 2],  # Mining -> short/medium
+    10: [1, 2],
+    11: [1, 2],  # Construction, Waste -> short/medium
+    12: [1],  # Public service -> mostly short
+    6: [1, 2],
+    7: [1, 2],
+    13: [1, 2],
+    98: [1, 2, 3],  # Agri/Forestry/Defence/Other
+    1: [2, 3],
+    2: [2, 3],
+    3: [2, 3],
+    4: [2, 3],
+    5: [2, 3],
+    9: [2, 3],  # long/medium industries
+}
+if "transport_type" in df.columns and "operation_range_volvo_hdt" in df.columns:
+    g1 = to_num(df["transport_type"])
+    g2 = to_num(df["operation_range_volvo_hdt"])
+    bad = []
+    for i in range(len(df)):
+        ind = int(g1.iat[i]) if not pd.isna(g1.iat[i]) else None
+        rng = int(g2.iat[i]) if not pd.isna(g2.iat[i]) else None
+        if ind is None or rng is None:
+            bad.append(False)
+        else:
+            allowed = INDUSTRY_G2_ALLOWED.get(ind, [1, 2, 3])
+            bad.append(rng not in allowed)
+    res.loc[bad, "CHK_G2_vs_G1"] = "Operation range atypical for industry"
+
+# B3a (consider) vs E4 for quota_make (if available)
+if "quota_make" in df.columns and COL.get("E4_choose_brand") in df.columns and brand_cols["consider"]:
+    qm = df["quota_make"].apply(parse_brand_id)
+    e4_hi = df[COL["E4_choose_brand"]].apply(lambda x: in_vals(x, [4, 5]))
+    mask = []
+    for i, b in qm.items():
+        if not b:
+            mask.append(False)
+            continue
+        col = brand_cols["consider"].get(b)
+        val = boolish(df.at[i, col]) if (col and col in df.columns) else False
+        mask.append(val and not e4_hi.iat[i])
+    res.loc[mask, "CHK_B3a_vs_E4_quota"] = "Consider quota make but E4 low"
+
+# E1/E4/E4c vs B2 alignment (for quota make)
+if "quota_make" in df.columns:
+    qm = df["quota_make"].apply(parse_brand_id)
+    for i, b in qm.items():
+        if not b:
+            continue
+        b2col = brand_cols["impression"].get(b)
+        if not b2col:
+            continue
+        b2 = to_num(df.at[i, b2col])
+        e_vals = []
+        for c in [COL.get("E1_overall"), COL.get("E4_choose_brand"), COL.get("E4c_pref_strength")]:
+            if c and c in df.columns:
+                e_vals.append(to_num(df.at[i, c]))
+        hiE = any([v in [4, 5] for v in e_vals if not pd.isna(v)])
+        loE = any([v in [1, 2] for v in e_vals if not pd.isna(v)])
+        if not pd.isna(b2):
+            if (b2 <= 3) and hiE:
+                res.loc[i, "CHK_E_hi_vs_B2_low"] = "E* high but B2 low"
+            if (b2 >= 4) and loE:
+                res.loc[i, "CHK_E_low_vs_B2_hi"] = "E* low but B2 high"
+
 # ----------------------------
 # Apply optional custom rules JSON (if provided)
 # ----------------------------
@@ -413,13 +561,393 @@ except Exception:
     st.warning("Custom rules JSON present but could not be applied. Check the Rule Builder export.")
 
 # ----------------------------
-# Output
+# KPI: share of A2b (main brand) that is also in B3a (considered)
 # ----------------------------
-st.subheader("Results preview")
-st.dataframe(res, use_container_width=True)
+kpi_msg = None
+if COL["main_brand"] in df.columns and brand_cols["consider"]:
+    mb = df[COL["main_brand"]].apply(parse_brand_id)
+    considered_main = []
+    for i, b in mb.items():
+        if not b:
+            considered_main.append(False)
+            continue
+        col = brand_cols["consider"].get(b)
+        considered_main.append(boolish(df.at[i, col]) if (col and col in df.columns) else False)
+    if len(considered_main):
+        share = float(np.mean(considered_main))
+        kpi_msg = f"A2b main brand is in B3a consider: {share:.1%} (target ~70–80%)."
+        st.info(kpi_msg)
 
-csv = res.to_csv(index=False).encode("utf-8")
-st.download_button("💾 Download flagged CSV", csv, file_name="bcs_checked_lite.csv", mime="text/csv")
+# ----------------------------
+# Output — build a clear, issues-only digest + tidy long table
+# ----------------------------
+# 1) Collapse all CHK_* columns into one readable, grouped string per row
+chk_cols = [c for c in res.columns if c.startswith("CHK_")]
+
+def _brand_name_from_chk(colname: str) -> str | None:
+    m = re.search(r"_b(\d+)", colname)
+    if not m:
+        return None
+    code = m.group(1)
+    # Friendlier fallback if mapping is missing (e.g., code 58)
+    return CODE_TO_BRAND.get(code, f"Brand code {code} (unmapped)")
+
+FRIENDLY = {
+    "S3a1-3 ≠ S3": "Truck subtypes don’t add up to total (S3).",
+    "Straight-liner": "Same score given across a whole section.",
+    "Operation range atypical for industry": "Operation range looks atypical for this industry.",
+    "Misaligned": "High performance score but low overall impression (B2).",
+    ">2 pts diff": "Overall satisfaction vs. truck rating differ by >2 points.",
+    "B2 should be 4/5": "Overall impression (B2) is low for that brand.",
+    "B2 should be 4/5 for preferred brand": "Overall impression (B2) is low for the preferred brand.",
+    "No brand with purchase ≤5y despite S4a1 recent": "S4 says recent purchase, but no brand purchased in last 5 years.",
+    ">3y gap between service and parts visits": "Service vs. parts visit dates differ by >3 years.",
+    "Too many brands vs fleet size": "Awareness count seems high vs. fleet size.",
+    "Main brand not in A1a": "Main brand not listed in unaided awareness.",
+    "Main brand not in A2a": "Main brand not listed in usage.",
+    "Used brand but never used workshop": "Used brand but never used authorized workshop.",
+    "E* high but B2 low": "Experience strong but overall impression (B2) low.",
+    "E* low but B2 high": "Experience low but overall impression (B2) high.",
+    "Low E4 but considering brands": "Considering brands but low likelihood to choose (E4).",
+}
+# Dynamic closeness phrasings for Excel/long list
+FRIENDLY.update({
+    f"Expect ≥{min_lo}": f"Closeness is a bit low (target ≥{min_lo}).",
+    f"Expect ≥{min_hi}": f"Closeness is lower than expected (target ≥{min_hi}).",
+})
+
+def _section_from_col(col: str) -> str:
+    if "truck_rating_" in col: return "truck"
+    if "salesdelivery_rating_" in col: return "sales & delivery"
+    if "workshop_rating_" in col: return "workshop"
+    return "section"
+
+def _human_list(prefix: str, items: list[str], show=4) -> str:
+    uniq = sorted(set(items))
+    if len(uniq) <= show:
+        return f"{prefix} {', '.join(uniq)}"
+    return f"{prefix} {len(uniq)} brands incl. {', '.join(uniq[:show])}"
+
+def digest_row(r: pd.Series) -> str:
+    closeness_hi_brands, closeness_lo_brands = [], []
+    b2low_brands, misalign_brands = [], []
+    straightliner_sections = []
+    generic_bits = []
+
+    for c in chk_cols:
+        v = r.get(c, "")
+        if not isinstance(v, str) or v in ("", "OK") or pd.isna(v):
+            continue
+
+        brand = _brand_name_from_chk(c)
+
+        # Group closeness by tier
+        if v == f"Expect ≥{min_hi}" and brand:
+            closeness_hi_brands.append(brand); continue
+        if v == f"Expect ≥{min_lo}" and brand:
+            closeness_lo_brands.append(brand); continue
+
+        # Other grouped brand-level items
+        if v == "Misaligned" and brand:
+            misalign_brands.append(brand); continue
+        if v in ("B2 should be 4/5", "B2 should be 4/5 for preferred brand") and brand:
+            b2low_brands.append(brand); continue
+        if v == "Straight-liner":
+            straightliner_sections.append(_section_from_col(c)); continue
+
+        # Everything else → translate if we can, keep brand if present
+        friendly = FRIENDLY.get(v, v)
+        generic_bits.append(friendly if not brand else f"{brand}: {friendly}")
+
+    parts = []
+    if closeness_hi_brands:
+        parts.append(_human_list(f"Closeness is lower than expected (target ≥{min_hi}) for:", closeness_hi_brands))
+    if closeness_lo_brands:
+        parts.append(_human_list(f"Closeness is a bit low (target ≥{min_lo}) for:", closeness_lo_brands))
+    if b2low_brands:
+        parts.append(_human_list("Overall impression (B2) is low for:", b2low_brands))
+    if misalign_brands:
+        parts.append(_human_list("High performance but low impression for:", misalign_brands))
+    if straightliner_sections:
+        parts.append(f"Straight-liner in {len(straightliner_sections)} section(s)")
+
+    parts += generic_bits
+    return " | ".join(parts) if parts else "Consistent"
+
+res["Consistency_Check"] = res.apply(digest_row, axis=1)
+
+# Fix display artifacts (Excel/CSV encoding glitches showing as â‰  / â‰≥)
+res["Consistency_Check"] = (
+    res["Consistency_Check"].astype(str)
+    .str.replace("â‰ ", "≠", regex=False)
+    .str.replace("â‰≥", "≥", regex=False)
+    .str.replace("â‰¥", "≥", regex=False)
+)
+
+# Count issues per row
+res["Issue_Count"] = res["Consistency_Check"].apply(
+    lambda s: 0
+    if (s == "Consistent" or pd.isna(s))
+    else len([x for x in s.split(" | ") if x.strip()])
+)
+
+# 2) Key columns for context
+key_cols = [
+    c
+    for c in [
+        "respid",
+        "id",
+        "segment",
+        "quota_make",
+        "main_brand",
+        "preference",
+        "overall_satisfaction",
+        "likelihood_choose_brand",
+        "preference_strength",
+    ]
+    if c in res.columns
+]
+
+# 3) Issues-only digest table
+issues_only = res[res["Consistency_Check"] != "Consistent"].copy()
+digest_view = (
+    issues_only[key_cols + ["Issue_Count", "Consistency_Check"]]
+    if key_cols
+    else issues_only[["Issue_Count", "Consistency_Check"]]
+)
+
+# ----------------------------
+# Filters & issue summary (niceties)
+# ----------------------------
+st.subheader("Issues Digest")
+
+# Build issue tokens and types
+issues_exploded = (
+    digest_view["Consistency_Check"].astype(str).str.split(r"\s\|\s", expand=False).explode().dropna().str.strip()
+)
+
+# Derive 'type' after the optional brand prefix ("Brand: Message")
+issue_types = (
+    issues_exploded.apply(lambda t: t.split(": ", 1)[1] if ": " in t else t)
+    .value_counts()
+    .rename_axis("Issue")
+    .to_frame("Count")
+    .reset_index()
+)
+
+# Filters
+col1, col2, col3 = st.columns([2, 2, 1])
+with col1:
+    keyword = st.text_input("Search (brand, rule text, respid/id)", "")
+with col2:
+    choose_types = st.multiselect(
+        "Filter by issue type(s)", options=issue_types["Issue"].tolist(), default=[]
+    )
+with col3:
+    min_flags = st.number_input("Min #flags", min_value=1, max_value=int(digest_view["Issue_Count"].max() or 1), value=1)
+
+# Apply filters
+filtered_digest = digest_view.copy()
+if keyword:
+    pat = re.escape(keyword)
+    filtered_digest = filtered_digest[
+        filtered_digest.apply(lambda r: r.astype(str).str.contains(pat, case=False, na=False).any(), axis=1)
+    ]
+
+if choose_types:
+    def row_has_any_type(s: str) -> bool:
+        toks = [t.strip() for t in str(s).split(" | ") if t.strip()]
+        types_in_row = [t.split(": ", 1)[1] if ": " in t else t for t in toks]
+        return any(t in types_in_row for t in choose_types)
+
+    filtered_digest = filtered_digest[filtered_digest["Consistency_Check"].apply(row_has_any_type)]
+
+if min_flags > 1:
+    filtered_digest = filtered_digest[filtered_digest["Issue_Count"] >= min_flags]
+
+st.dataframe(filtered_digest, use_container_width=True)
+
+# 4) Tidy long list of violations (one row per issue)
+rows = []
+if len(issues_only):
+    for idx, r in issues_only.iterrows():
+        for c in chk_cols:
+            v = r.get(c, "")
+            if isinstance(v, str) and v not in ("", "OK") and not pd.isna(v):
+                brand = _brand_name_from_chk(c)
+                rows.append(
+                    {
+                        "row_index": idx,
+                        "respid": r.get("respid", np.nan),
+                        "id": r.get("id", np.nan),
+                        "rule": c,
+                        "brand": brand,
+                        "message": FRIENDLY.get(v, v),  # translate here too
+                    }
+                )
+issues_long = (
+    pd.DataFrame(rows)
+    if rows
+    else pd.DataFrame(columns=["row_index", "respid", "id", "rule", "brand", "message"])
+)
+
+# Clean artifacts in detailed messages as well
+if not issues_long.empty:
+    issues_long["message"] = (
+        issues_long["message"].astype(str)
+        .str.replace("â‰ ", "≠", regex=False)
+        .str.replace("â‰≥", "≥", regex=False)
+        .str.replace("â‰¥", "≥", regex=False)
+    )
+
+st.subheader("Issues only — detailed list (one row per flag)")
+st.dataframe(issues_long, use_container_width=True)
+
+# 5) Optional: full table
+if show_full:
+    st.subheader("Full results table")
+    st.dataframe(res, use_container_width=True)
+
+# ----------------------------
+# Tiny legend for non-technical readers
+# ----------------------------
+with st.expander("Legend — what the flags mean"):
+    st.markdown(f"""
+- **Truck subtypes don’t add up to total (S3):** Counts in S3a1–3 should equal total S3 (only checked when any subtype is answered).
+- **Closeness expectations:**  
+  • **High intent** (B2=5 or brand is preferred): expect **≥{min_hi}**.  
+  • **Moderate intent** (B2=4 or brand is considered): expect **≥{min_lo}**.
+- **Overall impression (B2) is low:** Using/considering a brand but B2 &lt; 4.
+- **High performance but low impression:** Cfunc high while B2 &lt; 4.
+- **Straight-liner:** Same score across a whole section (may indicate low engagement).
+- **Service vs parts &gt;3y:** Recency answers disagree by more than 3 years.
+- **E1 vs truck &gt;2 pts:** Overall satisfaction and truck rating are far apart.
+- **Operation range atypical:** G2 choice looks unusual for the stated industry (G1).
+- **Awareness vs fleet size:** Awareness count looks high vs. fleet size.
+    """)
+
+# ----------------------------
+# Excel + CSV exports (niceties)
+# ----------------------------
+def _autofit(ws, data_df):
+    # Set sensible column widths + freeze header + add filter
+    for i, col in enumerate(data_df.columns):
+        try:
+            max_len = int(max(data_df[col].astype(str).map(len).max(), len(col))) + 2
+        except ValueError:
+            max_len = len(col) + 2
+        ws.set_column(i, i, min(max_len, 60))
+    ws.freeze_panes(1, 0)
+    ws.autofilter(0, 0, max(len(data_df), 1), max(len(data_df.columns) - 1, 0))
+
+
+def build_excel(digest_df: pd.DataFrame, detail_df: pd.DataFrame, full_df: pd.DataFrame | None = None) -> BytesIO | None:
+    # Build a multi-sheet Excel with Issues, Summary, Detailed (+ Full optional)
+    # Requires xlsxwriter for conditional formatting.
+    try:
+        import xlsxwriter  # noqa: F401
+    except Exception:
+        st.error("Excel export needs the 'xlsxwriter' package.\nTry one of:\n- py -m pip install xlsxwriter (Windows PowerShell)\n- python -m pip install xlsxwriter\n- conda install xlsxwriter")
+        return None
+
+    # Summary tables
+    if not digest_df.empty:
+        exploded = (
+            digest_df["Consistency_Check"].astype(str).str.split(r"\s\|\s", expand=False).explode().dropna().str.strip()
+        )
+        summary_types = (
+            exploded.apply(lambda t: t.split(": ", 1)[1] if ": " in t else t)
+            .value_counts()
+            .rename_axis("Issue")
+            .to_frame("Count")
+            .reset_index()
+        )
+    else:
+        summary_types = pd.DataFrame(columns=["Issue", "Count"])  # empty
+
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+        digest_df.to_excel(writer, index=False, sheet_name="Issues")
+        summary_types.to_excel(writer, index=False, sheet_name="Summary")
+        detail_df.to_excel(writer, index=False, sheet_name="Detailed_Issues")
+        if full_df is not None:
+            full_df.to_excel(writer, index=False, sheet_name="Full_Table")
+
+        wb = writer.book
+        ws_issues = writer.sheets["Issues"]
+        ws_summary = writer.sheets["Summary"]
+        ws_detailed = writer.sheets["Detailed_Issues"]
+        _autofit(ws_issues, digest_df)
+        _autofit(ws_summary, summary_types)
+        _autofit(ws_detailed, detail_df)
+        if full_df is not None:
+            _autofit(writer.sheets["Full_Table"], full_df)
+
+        # Conditional formatting highlights (Issues sheet: Consistency_Check column)
+        if "Consistency_Check" in digest_df.columns:
+            cc_idx = list(digest_df.columns).index("Consistency_Check")
+            nrows = max(len(digest_df), 1)
+            col_letter = xlsxwriter.utility.xl_col_to_name(cc_idx)
+            rng = f"{col_letter}2:{col_letter}{nrows+1}"
+            bold = wb.add_format({"bold": True})
+            wrap = wb.add_format({"text_wrap": True})
+            ws_issues.set_column(cc_idx, cc_idx, 80, wrap)
+            # New phrasing tokens
+            for token in [
+                "High performance but low impression",
+                "Closeness is lower than expected",
+                "Closeness is a bit low",
+                "Straight-liner",
+                "Overall satisfaction vs. truck rating differ by >2 points",
+                "Service vs. parts visit dates differ by >3 years",
+                "Awareness count seems high vs. fleet size",
+            ]:
+                ws_issues.conditional_format(
+                    rng,
+                    {
+                        "type": "text",
+                        "criteria": "containing",
+                        "value": token,
+                        "format": bold,
+                    },
+                )
+
+    out.seek(0)
+    return out
+
+
+# CSV (use utf-8-sig so Excel opens cleanly)
+digest_csv = digest_view.to_csv(index=False).encode("utf-8-sig")
+st.download_button(
+    "💾 Download issues digest (CSV)", digest_csv, file_name="bcs_issues_digest.csv", mime="text/csv"
+)
+
+#long_csv = issues_long.to_csv(index=False).encode("utf-8-sig")
+#st.download_button(
+#    "💾 Download issues long list (CSV)", long_csv, file_name="bcs_issues_long.csv", mime="text/csv"
+#)
+
+full_csv = res.to_csv(index=False).encode("utf-8-sig")
+st.download_button(
+    "💾 Download full flagged table (CSV)", full_csv, file_name="bcs_checked_lite.csv", mime="text/csv"
+)
+
+# One-click Excel (multi-sheet)
+excel_bytes = build_excel(filtered_digest, issues_long, res if show_full else None)
+if excel_bytes is not None:
+    st.download_button(
+        "📘 Download Excel (Issues + Summary + Detailed)",
+        data=excel_bytes.getvalue(),
+        file_name="logic_issues.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 st.markdown("---")
-st.markdown("**Included checks:** S3a sum to S3; A1a cap; A2b∈A1a & ∈A2a; usage/consider→B2≥4; pref(B3b)→B2≥4; strong intent→C-close≥min; Cfunc vs B2 (thresholded); straight-liners in F2/F4/F6; B3a×E4 sanity; E1 vs F1 proximity; S4a1 recent vs A3 years-ago; usage but never workshop. **+ Optional custom rules JSON.**")
+st.markdown(
+    "**Checks included:** S3a sum to S3 (only if any subtype answered); A1a cap + A1a vs S3 sanity; "
+    "A2b∈A1a & ∈A2a; B1 familiarity (used/aware); usage/consider→B2≥4; pref(B3b)→B2≥4; "
+    f"C-close tiered: B2=5/preferred→≥{min_hi}, B2=4/considered→≥{min_lo}; "
+    "Cfunc vs B2 (thresholded); straight-liners in F2/F4/F6; consider vs E4 sanity; E1 vs F1 proximity; "
+    "S4a1 recent vs A3; usage but never workshop; A4 vs A4b gap; G2 vs G1; quota B3a vs E4; E* vs B2 alignment. "
+    "**+ Optional custom rules JSON.**"
+)

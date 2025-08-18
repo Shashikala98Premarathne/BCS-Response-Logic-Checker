@@ -185,21 +185,68 @@ def in_vals(x, allowed: List[int]) -> bool:
 
 
 def parse_brand_id(val) -> str | None:
-    """Return brand code as string (e.g., '38') from code like 38 / 'b38',
-    or from label names using BRAND_NAME_TO_CODE (case-insensitive)."""
-    s = str(val).strip()
-    if not s or s.lower() in {"nan", "none"}:
+    """Return brand code as string (e.g., '38') from ints/floats like 38.0,
+    tokens like 'b38', or from label names via BRAND_NAME_TO_CODE."""
+    if val is None:
         return None
-    if s.isdigit():
-        return s
+    # numeric types
+    if isinstance(val, (int, np.integer)):
+        return str(int(val))
+    if isinstance(val, float):
+        if np.isnan(val):
+            return None
+        if float(val).is_integer():
+            return str(int(val))
+        return None  # non-integer float not a valid brand code
+
+    s = str(val).strip()
+    if not s:
+        return None
     sl = s.lower()
-    m = re.search(r"b(\d+)$", sl)
+    if sl in {"nan", "none", "null", "#null!", "na"}:
+        return None
+
+    # '38' or '38.0'
+    m = re.fullmatch(r"(\d+)(?:\.0+)?", sl)
     if m:
         return m.group(1)
-    if sl in BRAND_NAME_TO_CODE:
-        return BRAND_NAME_TO_CODE[sl]
-    sl2 = re.sub(r"\s+", " ", sl.replace("-", " ").replace("/", "/"))
-    return BRAND_NAME_TO_CODE.get(sl2)
+
+    # 'b38' / 'b 38'
+    m = re.search(r"\bb\s*(\d+)\b$", sl)
+    if m:
+        return m.group(1)
+
+    # Try label mapping (normalize)
+    sl2 = re.sub(r"\s+", " ", sl.replace("-", " ").replace("/", " / ")).strip()
+    if sl2 in BRAND_NAME_TO_CODE:
+        return BRAND_NAME_TO_CODE[sl2]
+
+    # Last resort: first number found
+    m = re.search(r"(\d+)", sl)
+    if m:
+        return m.group(1)
+
+    return None
+
+
+def consider_mark(x):
+    """Return True/False for 1/0; NaN/#NULL!/empty-> np.nan. Anything else -> False."""
+    if x is None:
+        return np.nan
+    s = str(x).strip().lower()
+    if s in {"", "nan", "none", "null", "#null!", "na"}:
+        return np.nan
+    if s in {"1", "true", "t", "yes", "y"}:
+        return True
+    if s in {"0", "false", "f", "no", "n"}:
+        return False
+    try:
+        v = float(s)
+        if np.isnan(v):
+            return np.nan
+        return int(v) == 1
+    except Exception:
+        return False
 
 
 # ----- Optional custom rules JSON (from Rule Builder) -----
@@ -245,7 +292,7 @@ def apply_custom_rules(df: pd.DataFrame, res: pd.DataFrame, rules: dict | None) 
                 m = re.search(r"_b(\d+)$", col)
                 if not m:
                     continue
-                bid = m.group(1)
+                bid = m.group("brand")
                 tgt = f"{impression_prefix}b{bid}"
                 if tgt not in df.columns:
                     continue
@@ -563,20 +610,48 @@ except Exception:
 # ----------------------------
 # KPI: share of A2b (main brand) that is also in B3a (considered)
 # ----------------------------
-kpi_msg = None
 if COL["main_brand"] in df.columns and brand_cols["consider"]:
     mb = df[COL["main_brand"]].apply(parse_brand_id)
-    considered_main = []
+
+    flags = []
+    skipped_unparsed = 0
+    skipped_no_col = 0
     for i, b in mb.items():
         if not b:
-            considered_main.append(False)
+            flags.append(np.nan)
+            skipped_unparsed += 1
             continue
         col = brand_cols["consider"].get(b)
-        considered_main.append(boolish(df.at[i, col]) if (col and col in df.columns) else False)
-    if len(considered_main):
-        share = float(np.mean(considered_main))
-        kpi_msg = f"A2b main brand is in B3a consider: {share:.1%} (target ~70–80%)."
-        st.info(kpi_msg)
+        if not col or col not in df.columns:
+            flags.append(np.nan)
+            skipped_no_col += 1
+            continue
+
+        val = df.at[i, col]
+        mark = consider_mark(val)  # treat #NULL!/empty as NaN, not False
+        if mark is True:
+            flags.append(1.0)
+        elif mark is False:
+            flags.append(0.0)
+        else:
+            flags.append(np.nan)
+
+    flags = pd.Series(flags, index=df.index, dtype="float")
+    valid = flags.dropna()
+
+    # De-dup respondents if multiple rows per respid
+    if not valid.empty and "respid" in df.columns and df["respid"].nunique() < len(df):
+        valid = valid.groupby(df.loc[valid.index, "respid"]).max()
+
+    if not valid.empty:
+        share = float(valid.mean())
+        n_eval = int(valid.count())
+        msg = f"A2b main brand is in B3a consider: {share:.1%} (n={n_eval} evaluable; target ~70–80%)."
+        if skipped_unparsed or skipped_no_col:
+            msg += f"  Skipped: {skipped_unparsed} unparsed A2b, {skipped_no_col} with no matching B3a column."
+        st.info(msg)
+    else:
+        st.warning("A2b→B3a KPI is N/A — no evaluable rows (A2b couldn’t be parsed or no matching B3a columns like 'consideration_b{code}').")
 
 # ----------------------------
 # Output — build a clear, issues-only digest + tidy long table
@@ -697,7 +772,7 @@ key_cols = [
     for c in [
         "respid",
         "id",
-        "segment",
+        "company_position",
         "quota_make",
         "main_brand",
         "preference",
@@ -892,7 +967,6 @@ def build_excel(digest_df: pd.DataFrame, detail_df: pd.DataFrame, full_df: pd.Da
             bold = wb.add_format({"bold": True})
             wrap = wb.add_format({"text_wrap": True})
             ws_issues.set_column(cc_idx, cc_idx, 80, wrap)
-            # New phrasing tokens
             for token in [
                 "High performance but low impression",
                 "Closeness is lower than expected",
@@ -904,13 +978,45 @@ def build_excel(digest_df: pd.DataFrame, detail_df: pd.DataFrame, full_df: pd.Da
             ]:
                 ws_issues.conditional_format(
                     rng,
-                    {
-                        "type": "text",
-                        "criteria": "containing",
-                        "value": token,
-                        "format": bold,
-                    },
+                    {"type": "text", "criteria": "containing", "value": token, "format": bold},
                 )
+
+    out.seek(0)
+    return out
+
+
+def build_issues_only_excel(detail_df: pd.DataFrame) -> BytesIO | None:
+    """Single-file Excel for the long issues list with handy summaries."""
+    try:
+        import xlsxwriter  # noqa: F401
+    except Exception:
+        st.error("Excel export needs the 'xlsxwriter' package.\nTry one of:\n- py -m pip install xlsxwriter (Windows PowerShell)\n- python -m pip install xlsxwriter\n- conda install xlsxwriter")
+        return None
+
+    # Summaries
+    if not detail_df.empty:
+        summary_by_issue = (
+            detail_df["message"].value_counts().rename_axis("Issue").to_frame("Count").reset_index()
+        )
+        summary_by_rule = (
+            detail_df["rule"].value_counts().rename_axis("Rule").to_frame("Count").reset_index()
+        )
+    else:
+        summary_by_issue = pd.DataFrame(columns=["Issue", "Count"])
+        summary_by_rule = pd.DataFrame(columns=["Rule", "Count"])
+
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+        # Main detailed list
+        detail_df.to_excel(writer, index=False, sheet_name="Detailed_Issues")
+        _autofit(writer.sheets["Detailed_Issues"], detail_df)
+
+        # Summaries for quick filtering
+        summary_by_issue.to_excel(writer, index=False, sheet_name="Summary_by_Issue")
+        _autofit(writer.sheets["Summary_by_Issue"], summary_by_issue)
+
+        summary_by_rule.to_excel(writer, index=False, sheet_name="Summary_by_Rule")
+        _autofit(writer.sheets["Summary_by_Rule"], summary_by_rule)
 
     out.seek(0)
     return out
@@ -927,18 +1033,23 @@ st.download_button(
 #    "💾 Download issues long list (CSV)", long_csv, file_name="bcs_issues_long.csv", mime="text/csv"
 #)
 
-full_csv = res.to_csv(index=False).encode("utf-8-sig")
-st.download_button(
-    "💾 Download full flagged table (CSV)", full_csv, file_name="bcs_checked_lite.csv", mime="text/csv"
-)
-
-# One-click Excel (multi-sheet)
+# One-click Excel (multi-sheet with digest + detailed)
 excel_bytes = build_excel(filtered_digest, issues_long, res if show_full else None)
 if excel_bytes is not None:
     st.download_button(
         "📘 Download Excel (Issues + Summary + Detailed)",
         data=excel_bytes.getvalue(),
         file_name="logic_issues.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+# NEW: Issues-only Excel (just the detailed list + summaries)
+issues_only_bytes = build_issues_only_excel(issues_long)
+if issues_only_bytes is not None:
+    st.download_button(
+        "📗 Download Issues-only Excel (Detailed list)",
+        data=issues_only_bytes.getvalue(),
+        file_name="issues_only.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 

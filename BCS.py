@@ -14,7 +14,7 @@ from io import BytesIO
 
 st.set_page_config(page_title="BCS Survey Logic Checker", layout="wide")
 st.title("📊 BCS Survey Logic Checker")
-st.caption(" Uses the defined schema and brand patterns. Optional custom rules JSON. Outputs a clean issues-only digest.")
+st.caption(" Identified cases with issues are displayed below: Please Click download to to access files locally. Optional custom rules JSON.")
 
 # ----------------------------
 # Robust file reading helpers (CSV + Excel, encoding & delimiter auto)

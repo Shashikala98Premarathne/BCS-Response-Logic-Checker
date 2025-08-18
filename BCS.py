@@ -625,6 +625,7 @@ if "quota_make" in df.columns and COL.get("E4_choose_brand") in df.columns and b
         mask.append(val and not e4_hi.iat[i])
     res.loc[mask, "CHK_B3a_vs_E4_quota"] = "Consider quota make but low likelihood to choose (E4)"
 
+
 # E1/E4/E4c vs B2 alignment (for quota make)
 if "quota_make" in df.columns:
     qm = df["quota_make"].apply(parse_brand_id)
@@ -634,18 +635,41 @@ if "quota_make" in df.columns:
         b2col = brand_cols["impression"].get(b)
         if not b2col:
             continue
+
         b2 = to_num(df.at[i, b2col])
-        e_vals = []
-        for c in [COL.get("E1_overall"), COL.get("E4_choose_brand"), COL.get("E4c_pref_strength")]:
-            if c and c in df.columns:
-                e_vals.append(to_num(df.at[i, c]))
-        hiE = any([v in [4, 5] for v in e_vals if not pd.isna(v)])
-        loE = any([v in [1, 2] for v in e_vals if not pd.isna(v)])
-        if not pd.isna(b2):
-            if (b2 <= 3) and hiE:
-                res.loc[i, "CHK_E_hi_vs_B2_low"] = "E* high but B2 low"
-            if (b2 >= 4) and loE:
-                res.loc[i, "CHK_E_low_vs_B2_hi"] = "E* low but B2 high"
+        if pd.isna(b2):
+            continue
+
+        # --- E1 vs B2 (Overall satisfaction) ---
+        e1_col = COL.get("E1_overall")
+        if e1_col and e1_col in df.columns:
+            e1 = to_num(df.at[i, e1_col])
+            if not pd.isna(e1):
+                if (b2 <= 3) and in_vals(e1, [4, 5]):
+                    res.loc[i, "CHK_E1_hi_vs_B2_low"] = "E1 high but B2 low"
+                if (b2 >= 4) and in_vals(e1, [1, 2]):
+                    res.loc[i, "CHK_E1_low_vs_B2_hi"] = "E1 low but B2 high"
+
+        # --- E4 vs B2 (Likelihood to choose) ---
+        e4_col = COL.get("E4_choose_brand")
+        if e4_col and e4_col in df.columns:
+            e4 = to_num(df.at[i, e4_col])
+            if not pd.isna(e4):
+                if (b2 <= 3) and in_vals(e4, [4, 5]):
+                    res.loc[i, "CHK_E4_hi_vs_B2_low"] = "E4 high but B2 low"
+                if (b2 >= 4) and in_vals(e4, [1, 2]):
+                    res.loc[i, "CHK_E4_low_vs_B2_hi"] = "E4 low but B2 high"
+
+        # --- E4c vs B2 (Preference strength) ---
+        e4c_col = COL.get("E4c_pref_strength")
+        if e4c_col and e4c_col in df.columns:
+            e4c = to_num(df.at[i, e4c_col])
+            if not pd.isna(e4c):
+                if (b2 <= 3) and in_vals(e4c, [4, 5]):
+                    res.loc[i, "CHK_E4c_hi_vs_B2_low"] = "E4c high but B2 low"
+                if (b2 >= 4) and in_vals(e4c, [1, 2]):
+                    res.loc[i, "CHK_E4c_low_vs_B2_hi"] = "E4c low but B2 high"
+
 
 # ----------------------------
 # Apply optional custom rules JSON (if provided)
@@ -720,7 +744,7 @@ FRIENDLY = {
     "Straight-liner": "Same score given across a whole section.",
     "Operation range unmatched for industry": "Operation range looks unmatched for this industry.",
     "Misaligned": "High performance score but low overall impression (B2).",
-    ">2 pts diff": "Overall satisfaction vs. truck rating differ by >2 points.",
+    ">2 pts diff": "Overall satisfaction vs. overall truck rating differ by >2 points.",
     "B2 should be 4/5": "Overall impression (B2) is low for that brand.",
     "B2 should be 4/5 for preferred brand": "Overall impression (B2) is low for the preferred brand.",
     "No brand with purchase ≤5y despite S4a1 recent": "S4 says recent purchase, but no brand purchased in last 5 years.",
@@ -729,8 +753,12 @@ FRIENDLY = {
     "Main brand not in A1a": "Main brand not listed in unaided awareness.",
     "Main brand not in A2a": "Main brand not listed in usage.",
     "Used brand but never used workshop": "Used brand but never used authorized workshop.",
-    "E* high but B2 low": "Experience high but overall impression (B2) low.",
-    "E* low but B2 high": "Experience low but overall impression (B2) high.",
+    "E1 high but B2 low":  "Overall satisfaction (E1) high but overall impression (B2) low.",
+    "E1 low but B2 high":  "Overall satisfaction (E1) low but overall impression (B2) high.",
+    "E4 high but B2 low":  "Likelihood to choose (E4) high but overall impression (B2) low.",
+    "E4 low but B2 high":  "Likelihood to choose (E4) low but overall impression (B2) high.",
+    "E4c high but B2 low": "Preference strength (E4c) high but overall impression (B2) low.",
+    "E4c low but B2 high": "Preference strength (E4c) low but overall impression (B2) high.",
     "Low E4 but considering brands": "Considering brands but low likelihood to choose (E4).",
 }
 # Dynamic closeness phrasings for Excel/long list

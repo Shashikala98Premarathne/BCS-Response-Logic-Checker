@@ -14,7 +14,7 @@ from io import BytesIO
 
 st.set_page_config(page_title="BCS Survey Logic Checker", layout="wide")
 st.title("📊 BCS Survey Logic Checker")
-st.caption(" Identified cases with issues are displayed below: Please Click download to to access files locally. Optional custom rules JSON.")
+st.caption(" Identified cases with issues are displayed below: Please click Download to access files locally. Optionally: Upload a custom rules JSON.")
 
 # ----------------------------
 # Robust file reading helpers (CSV + Excel, encoding & delimiter auto)
@@ -463,7 +463,7 @@ for pre, human_msg in section_labels.items():
         res[name] = "OK"
         res.loc[straight, name] = "Straight-liner"
 
-# 24) If any brand considered but E4 low → flag (coarse sanity, E4 is quota-make specific)
+# 24) If any brand considered B3a but E4 low → flag (coarse sanity, E4 is quota-make specific)
 if COL["E4_choose_brand"] in df.columns and brand_cols["consider"]:
     low_e4 = ~df[COL["E4_choose_brand"]].apply(lambda x: in_vals(x, [4, 5]))
     any_consider = (
@@ -482,8 +482,8 @@ if COL["E1_overall"] in df.columns and "overall_rating_truck" in df.columns:
     res.loc[(e1 - f1).abs() > 2, "CHK_E1_vs_F1"] = ">2 pts diff"
 
 # 5/16) S4a1 recent vs A3 (years-ago per brand): if S4a1 recent but no brand with ≤5 years
-A3_pre = "last_purchase_b"  # years ago (0..99 where 99=never)
-A4_pre = "last_workshop_visit_b"  # years ago (0..99/never)
+A3_pre = "last_purchase_b"  # years ago (0..99 where 9=never)
+A4_pre = "last_workshop_visit_b"  # years ago (0..9/never)
 A4b_pre = "last_workshop2_visit_b"
 
 
@@ -561,7 +561,7 @@ if "transport_type" in df.columns and "operation_range_volvo_hdt" in df.columns:
         else:
             allowed = INDUSTRY_G2_ALLOWED.get(ind, [1, 2, 3])
             bad.append(rng not in allowed)
-    res.loc[bad, "CHK_G2_vs_G1"] = "Operation range atypical for industry"
+    res.loc[bad, "CHK_G2_vs_G1"] = "Operation range unmatched for industry"
 
 # B3a (consider) vs E4 for quota_make (if available)
 if "quota_make" in df.columns and COL.get("E4_choose_brand") in df.columns and brand_cols["consider"]:
@@ -670,7 +670,7 @@ def _brand_name_from_chk(colname: str) -> str | None:
 FRIENDLY = {
     "S3a1-3 ≠ S3": "Truck subtypes don’t add up to total (S3).",
     "Straight-liner": "Same score given across a whole section.",
-    "Operation range atypical for industry": "Operation range looks atypical for this industry.",
+    "Operation range unmatched for industry": "Operation range looks unmatched for this industry.",
     "Misaligned": "High performance score but low overall impression (B2).",
     ">2 pts diff": "Overall satisfaction vs. truck rating differ by >2 points.",
     "B2 should be 4/5": "Overall impression (B2) is low for that brand.",
@@ -687,7 +687,7 @@ FRIENDLY = {
 }
 # Dynamic closeness phrasings for Excel/long list
 FRIENDLY.update({
-    f"Expect ≥{min_lo}": f"Closeness is a bit low (target ≥{min_lo}).",
+    f"Expect ≥{min_lo}": f"Closeness is a bit low(target ≥{min_lo}).",
     f"Expect ≥{min_hi}": f"Closeness is lower than expected (target ≥{min_hi}).",
 })
 
@@ -773,6 +773,7 @@ key_cols = [
         "respid",
         "id",
         "company_position",
+        "n_heavy_duty_trucks",
         "quota_make",
         "main_brand",
         "preference",
@@ -875,7 +876,7 @@ if not issues_long.empty:
         .str.replace("â‰¥", "≥", regex=False)
     )
 
-st.subheader("Issues only — detailed list (one row per flag)")
+st.subheader("Issues only — Detailed List (one row per flag)")
 st.dataframe(issues_long, use_container_width=True)
 
 # 5) Optional: full table
@@ -886,7 +887,7 @@ if show_full:
 # ----------------------------
 # Tiny legend for non-technical readers
 # ----------------------------
-with st.expander("Legend — what the flags mean"):
+with st.expander("Legend — what the Flags mean"):
     st.markdown(f"""
 - **Truck subtypes don’t add up to total (S3):** Counts in S3a1–3 should equal total S3 (only checked when any subtype is answered).
 - **Closeness expectations:**  
@@ -1037,7 +1038,7 @@ st.download_button(
 excel_bytes = build_excel(filtered_digest, issues_long, res if show_full else None)
 if excel_bytes is not None:
     st.download_button(
-        "📘 Download Excel (Issues + Summary + Detailed)",
+        "📘 Download Issues-only Excel (Summary)",
         data=excel_bytes.getvalue(),
         file_name="logic_issues.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1047,7 +1048,7 @@ if excel_bytes is not None:
 issues_only_bytes = build_issues_only_excel(issues_long)
 if issues_only_bytes is not None:
     st.download_button(
-        "📗 Download Issues-only Excel (Detailed list)",
+        "📘 Download Issues-only Excel (Detailed list)",
         data=issues_only_bytes.getvalue(),
         file_name="issues_only.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

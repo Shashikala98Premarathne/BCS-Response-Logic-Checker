@@ -509,7 +509,9 @@ for pre, human_msg in section_labels.items():
         straight = vals.nunique(axis=1) == 1
         name = f"CHK_straightliner_{pre.rstrip('_')}"
         res[name] = "OK"
-        res.loc[straight, name] = "Straight-liner"
+        # Write a section-specific message (keeps the word 'Straight-liner' for Excel highlighting)
+        res.loc[straight, name] = f"Straight-liner — {human_msg}"
+
 
 # 24) If any brand considered B3a but E4 low → flag (coarse sanity, E4 is quota-make specific)
 #if COL["E4_choose_brand"] in df.columns and brand_cols["consider"]:
@@ -782,7 +784,6 @@ def _human_list(prefix: str, items: list[str], show=4) -> str:
 def digest_row(r: pd.Series) -> str:
     closeness_hi_brands, closeness_lo_brands = [], []
     b2low_brands, misalign_brands = [], []
-    straightliner_sections = []
     generic_bits = []
 
     for c in chk_cols:
@@ -803,10 +804,8 @@ def digest_row(r: pd.Series) -> str:
             misalign_brands.append(brand); continue
         if v in ("B2 should be 4/5", "B2 should be 4/5 for preferred brand") and brand:
             b2low_brands.append(brand); continue
-        if v == "Straight-liner":
-            straightliner_sections.append(_section_from_col(c)); continue
 
-        # Everything else → translate if we can, keep brand if present
+        # Everything else (including per-section Straight-liner messages) → keep verbatim
         friendly = FRIENDLY.get(v, v)
         generic_bits.append(friendly if not brand else f"{brand}: {friendly}")
 
@@ -819,11 +818,10 @@ def digest_row(r: pd.Series) -> str:
         parts.append(_human_list("Overall impression (B2) is low for:", b2low_brands))
     if misalign_brands:
         parts.append(_human_list("High performance but low impression for:", misalign_brands))
-    if straightliner_sections:
-        parts.append(f"Straight-liner in {len(straightliner_sections)} section(s)")
 
     parts += generic_bits
     return " | ".join(parts) if parts else "Consistent"
+
 
 res["Consistency_Check"] = res.apply(digest_row, axis=1)
 

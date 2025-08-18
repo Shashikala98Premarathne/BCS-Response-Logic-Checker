@@ -102,6 +102,22 @@ except Exception as e:
     st.error(f"Failed to read file: {e}")
     st.stop()
 
+# Normalize common null tokens early so numerics parse cleanly
+df.replace(
+    {
+        "#NULL!": np.nan,
+        "NULL": np.nan,
+        "null": np.nan,
+        "NaN": np.nan,
+        "nan": np.nan,
+        "": np.nan,
+        "na": np.nan,
+        "N/A": np.nan,
+        "n/a": np.nan,
+    },
+    inplace=True,
+)
+
 res = df.copy()
 
 # Tiered C-close thresholds derived from the slider
@@ -173,8 +189,31 @@ def to_num(x):
 
 
 def boolish(x) -> bool:
+    """
+    Robust 0/1 (or yes/no/true/false) detector:
+    - Treat any non-zero numeric (int/float or numeric string like '1', '1.0') as True
+    - 0 or '0' as False
+    - #NULL!/NaN/empty/None as False
+    - 'yes','y','true','t' as True; 'no','n','false','f' as False
+    """
+    if pd.isna(x):
+        return False
+    if isinstance(x, (int, np.integer, float, np.floating)):
+        try:
+            return float(x) != 0.0
+        except Exception:
+            return False
     s = str(x).strip().lower()
-    return s in {"1", "true", "t", "yes", "y"}
+    if s in {"", "nan", "none", "null", "#null!", "na", "n/a"}:
+        return False
+    if s in {"true", "t", "yes", "y"}:
+        return True
+    if s in {"false", "f", "no", "n"}:
+        return False
+    try:
+        return float(s) != 0.0
+    except Exception:
+        return s == "1"
 
 
 def in_vals(x, allowed: List[int]) -> bool:
@@ -233,8 +272,10 @@ def consider_mark(x):
     """Return True/False for 1/0; NaN/#NULL!/empty-> np.nan. Anything else -> False."""
     if x is None:
         return np.nan
+    if pd.isna(x):
+        return np.nan
     s = str(x).strip().lower()
-    if s in {"", "nan", "none", "null", "#null!", "na"}:
+    if s in {"", "nan", "none", "null", "#null!", "na", "n/a"}:
         return np.nan
     if s in {"1", "true", "t", "yes", "y"}:
         return True
@@ -319,18 +360,25 @@ if all(k in df.columns for k in [S["HD_count"], S["Tractors"], S["Rigids"], S["T
     res["CHK_S3a_sum"] = "OK"
     res.loc[has_any_s3a & total.notna() & (subsum != total), "CHK_S3a_sum"] = "S3a1-3 ≠ S3"
 
-# 3) A1a total sanity (awareness) + cap + S3 sanity
+# 3) A1a total sanity (awareness) — merged cap + S3 sanity (single flag)
 aw_cols = list(brand_cols["awareness"].values())
 if aw_cols:
     sel_aw = df[aw_cols].applymap(boolish)
     count_aw = sel_aw.sum(axis=1)
     res["CHK_A1a_total_count"] = count_aw
-    res["CHK_A1a_total_flag"] = np.where(count_aw > a1a_cap, f">{a1a_cap} brands", "OK")
-    # A1a vs S3 (awareness shouldn’t wildly exceed fleet size)
+    res["CHK_A1a_total_flag"] = "OK"
+
+    # Fixed cap (from slider)
+    over_cap = count_aw > a1a_cap
+    res.loc[over_cap, "CHK_A1a_total_flag"] = f">{a1a_cap} brands"
+
+    # Escalate to fleet-size message where applicable (overrides fixed-cap msg)
     if S["HD_count"] in df.columns:
         s3 = to_num(df[S["HD_count"]]).fillna(0)
-        allowed = np.maximum(a1a_cap, np.minimum(25, s3 + 2))
-        res.loc[count_aw > allowed, "CHK_A1a_vs_S3"] = "Too many brands vs fleet size"
+        allowed = np.maximum(a1a_cap, np.minimum(25, s3 + 2))  # tolerance by fleet size
+        over_s3 = count_aw > allowed
+        res.loc[over_s3, "CHK_A1a_total_flag"] = "Too many brands vs fleet size"
+
 
 # 4) Main make (A2b) must be in A1a and A2a
 if COL["main_brand"] in df.columns:
@@ -464,15 +512,15 @@ for pre, human_msg in section_labels.items():
         res.loc[straight, name] = "Straight-liner"
 
 # 24) If any brand considered B3a but E4 low → flag (coarse sanity, E4 is quota-make specific)
-if COL["E4_choose_brand"] in df.columns and brand_cols["consider"]:
-    low_e4 = ~df[COL["E4_choose_brand"]].apply(lambda x: in_vals(x, [4, 5]))
-    any_consider = (
-        pd.DataFrame({b: df[col].apply(boolish) for b, col in brand_cols["consider"].items()}).any(axis=1)
-        if brand_cols["consider"]
-        else False
-    )
-    res["CHK_E4_low_with_consider"] = "OK"
-    res.loc[any_consider & low_e4, "CHK_E4_low_with_consider"] = "Low E4 but considering brands"
+#if COL["E4_choose_brand"] in df.columns and brand_cols["consider"]:
+#    low_e4 = ~df[COL["E4_choose_brand"]].apply(lambda x: in_vals(x, [4, 5]))
+#    any_consider = (
+#        pd.DataFrame({b: df[col].apply(boolish) for b, col in brand_cols["consider"].items()}).any(axis=1)
+#        if brand_cols["consider"]
+#        else False
+#    )
+#    res["CHK_E4_low_with_consider"] = "OK"
+#    res.loc[any_consider & low_e4, "CHK_E4_low_with_consider"] = "Low E4 but considering brands"
 
 # 37) E1 vs F1 proximity (|diff|<=2)
 if COL["E1_overall"] in df.columns and "overall_rating_truck" in df.columns:
@@ -575,7 +623,7 @@ if "quota_make" in df.columns and COL.get("E4_choose_brand") in df.columns and b
         col = brand_cols["consider"].get(b)
         val = boolish(df.at[i, col]) if (col and col in df.columns) else False
         mask.append(val and not e4_hi.iat[i])
-    res.loc[mask, "CHK_B3a_vs_E4_quota"] = "Consider quota make but E4 low"
+    res.loc[mask, "CHK_B3a_vs_E4_quota"] = "Consider quota make but low likelihood to choose (E4)"
 
 # E1/E4/E4c vs B2 alignment (for quota make)
 if "quota_make" in df.columns:
@@ -681,7 +729,7 @@ FRIENDLY = {
     "Main brand not in A1a": "Main brand not listed in unaided awareness.",
     "Main brand not in A2a": "Main brand not listed in usage.",
     "Used brand but never used workshop": "Used brand but never used authorized workshop.",
-    "E* high but B2 low": "Experience strong but overall impression (B2) low.",
+    "E* high but B2 low": "Experience high but overall impression (B2) low.",
     "E* low but B2 high": "Experience low but overall impression (B2) high.",
     "Low E4 but considering brands": "Considering brands but low likelihood to choose (E4).",
 }
@@ -856,6 +904,8 @@ if len(issues_only):
                         "row_index": idx,
                         "respid": r.get("respid", np.nan),
                         "id": r.get("id", np.nan),
+                        "main_brand": r.get(COL["main_brand"], np.nan),
+                        "quota_make": r.get("quota_make", np.nan),
                         "rule": c,
                         "brand": brand,
                         "message": FRIENDLY.get(v, v),  # translate here too
@@ -899,7 +949,7 @@ with st.expander("Legend — what the Flags mean"):
 - **Service vs parts &gt;3y:** Recency answers disagree by more than 3 years.
 - **E1 vs truck &gt;2 pts:** Overall satisfaction and truck rating are far apart.
 - **Operation range atypical:** G2 choice looks unusual for the stated industry (G1).
-- **Awareness vs fleet size:** Awareness count looks high vs. fleet size.
+- **Awareness vs fleet size:** Awareness count looks high vs. fleet size (n_heavy_duty_trucks).
     """)
 
 # ----------------------------
@@ -1024,7 +1074,7 @@ def build_issues_only_excel(detail_df: pd.DataFrame) -> BytesIO | None:
 
 
 # CSV (use utf-8-sig so Excel opens cleanly)
-digest_csv = digest_view.to_csv(index=False).encode("utf-8-sig")
+digest_csv = filtered_digest.to_csv(index=False).encode("utf-8-sig")
 st.download_button(
     "💾 Download issues digest (CSV)", digest_csv, file_name="bcs_issues_digest.csv", mime="text/csv"
 )

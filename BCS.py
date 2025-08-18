@@ -12,6 +12,41 @@ import json
 import csv
 from io import BytesIO
 
+# --- solid background colors (main + sidebar) ---
+def set_background_solid(main="#EAF3FF", sidebar="#F5F7FB"):
+    st.markdown(f"""
+    <style>
+      /* MAIN AREA */
+      [data-testid="stAppViewContainer"],
+      [data-testid="stAppViewContainer"] .main,
+      [data-testid="stAppViewContainer"] .block-container {{
+        background-color: {main} !important;
+      }}
+
+      /* SIDEBAR */
+      [data-testid="stSidebar"],
+      [data-testid="stSidebar"] > div,
+      [data-testid="stSidebar"] .block-container {{
+        background-color: {sidebar} !important;
+      }}
+
+      /* Make header blend in */
+      header[data-testid="stHeader"] {{
+        background: transparent;
+      }}
+
+      /* Tables/dataframes: no white card */
+      [data-testid="stDataFrame"],
+      [data-testid="stTable"] {{
+        background-color: transparent !important;
+      }}
+    </style>
+    """, unsafe_allow_html=True)
+
+set_background_solid()  # ocean-blue main, soft-gray sidebar
+
+
+
 st.set_page_config(page_title="BCS Survey Logic Checker", layout="wide")
 st.title("📊 BCS Survey Logic Checker")
 st.caption(" Identified cases with issues are displayed below: Please click Download to access files locally. Optionally: Upload a custom rules JSON to define new rules.")
@@ -101,6 +136,7 @@ try:
 except Exception as e:
     st.error(f"Failed to read file: {e}")
     st.stop()
+
 
 # Normalize common null tokens early so numerics parse cleanly
 df.replace(

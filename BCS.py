@@ -720,6 +720,8 @@ except Exception:
 # ----------------------------
 # KPI: share of A2b (main brand) that is also in B3a (considered)
 # ----------------------------
+# KPI: share of A2b (main brand) that is also in B3a (considered) — clear denominators
+# ----------------------------
 if COL["main_brand"] in df.columns and brand_cols["consider"]:
     mb = df[COL["main_brand"]].apply(parse_brand_id)
 
@@ -737,31 +739,45 @@ if COL["main_brand"] in df.columns and brand_cols["consider"]:
             skipped_no_col += 1
             continue
 
-        val = df.at[i, col]
-        mark = consider_mark(val)  # treat #NULL!/empty as NaN, not False
-        if mark is True:
-            flags.append(1.0)
-        elif mark is False:
-            flags.append(0.0)
-        else:
-            flags.append(np.nan)
+        mark = consider_mark(df.at[i, col])  # True/False/NaN
+        flags.append(1.0 if mark is True else (0.0 if mark is False else np.nan))
 
     flags = pd.Series(flags, index=df.index, dtype="float")
-    valid = flags.dropna()
 
-    # De-dup respondents if multiple rows per respid
-    if not valid.empty and "respid" in df.columns and df["respid"].nunique() < len(df):
-        valid = valid.groupby(df.loc[valid.index, "respid"]).max()
+    # Raw (per-row) evaluable denominator BEFORE any de-dup
+    valid_raw = flags.dropna()
+    n_raw = int(valid_raw.count())
+    total_rows = len(df)
 
-    if not valid.empty:
+    # Optional de-dup by respid, WITHOUT losing rows where respid is NaN
+    dedup_applied = False
+    valid = valid_raw.copy()
+    if "respid" in df.columns and df["respid"].nunique(dropna=False) < len(df):
+        dedup_applied = True
+        gkey = df.loc[valid_raw.index, "respid"]
+        mask = gkey.notna()
+        # group only the non-NaN respids; keep NaN-respid rows as-is
+        grouped = valid_raw[mask].groupby(gkey[mask]).max()
+        valid = pd.concat([grouped, valid_raw[~mask]], axis=0)
+
+    n_eval = int(valid.count())
+    if n_eval > 0:
         share = float(valid.mean())
-        n_eval = int(valid.count())
-        msg = f"A2b main brand is in B3a consider: {share:.1%} (n={n_eval} evaluable; target ~70–80%)."
-        if skipped_unparsed or skipped_no_col:
-            msg += f"  Skipped: {skipped_unparsed} unparsed A2b, {skipped_no_col} with no matching B3a column."
+        msg = (
+            f"A2b main brand is in B3a consider: {share:.1%} "
+            f"(n={n_eval} evaluable"
+            f"{' after de-dup to unique respid' if dedup_applied else ''}; "
+            f"raw rows evaluable={n_raw}; total rows={total_rows}). "
+            f"Skipped (pre de-dup): {skipped_unparsed} unparsed A2b, "
+            f"{skipped_no_col} with no matching B3a column."
+        )
         st.info(msg)
     else:
-        st.warning("A2b→B3a KPI is N/A — no evaluable rows (A2b couldn’t be parsed or no matching B3a columns like 'consideration_b{code}').")
+        st.warning(
+            "A2b→B3a KPI is N/A — no evaluable rows (A2b couldn’t be parsed, no matching "
+            "B3a column, or B3a blank)."
+        )
+
 
 # ----------------------------
 # Output — build a clear, issues-only digest + tidy long table

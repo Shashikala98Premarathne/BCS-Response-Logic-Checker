@@ -411,7 +411,7 @@ if aw_cols:
     # Escalate to fleet-size message where applicable (overrides fixed-cap msg)
     if S["HD_count"] in df.columns:
         s3 = to_num(df[S["HD_count"]]).fillna(0)
-        allowed = np.maximum(a1a_cap, np.minimum(25, s3 + 2))  # tolerance by fleet size
+        allowed = np.maximum(a1a_cap, np.minimum(25, s3 + 4))  # tolerance by fleet size
         over_s3 = count_aw > allowed
         res.loc[over_s3, "CHK_A1a_total_flag"] = "Too many brands vs fleet size"
 

@@ -854,20 +854,52 @@ if show_full:
     st.dataframe(res, use_container_width=True)
 
 # Legend
-with st.expander("Legend — what the Flags mean"):
-    st.markdown(f"""
-- **Truck subtypes don’t add up to total (S3):** Counts in S3a1–3 should equal S3 (when any subtype is answered).
-- **Closeness expectations:**  
-  • **B2=5 (or B2=5 & considered):** expect **≥{MIN_CLOSE_B2_EQ5}** (8–10).  
-  • **B2=4** or **preferred/considered**: expect **≥{MIN_CLOSE_LO}**.
-- **B3a (consider) ⇒ B2≥4:** Considering a brand but B2 is low.
-- **High performance but B2 very low:** Cfunc≥{CFUNC_HIGH} with B2 in 1–2.
-- **Straight-liner across F2/F4/F6:** Same score across all questions in all 3 sections.
-- **S4a1 vs A3 (mapped):** 2025→A3=0, 2024→1, …, 2020→5; “2019 or earlier” ⇒ A3≥6; “Never” ⇒ no A3 purchase; “Don’t know” is skipped.
-- **E vs B2 alignment:** E1/E4/E4c ≤2 with B2≥{B2_HIGH_MIN}, or E1/E4/E4c ≥4 with B2≤{B2_LOW_MAX}.
-- **F1 vs E1 consistency:** If F1 is 1–2 then E1 shouldn’t be 4–5, and vice versa.
-- **Awareness vs fleet size:** Awareness count looks high vs. fleet size (n_heavy_duty_trucks).
-    """)
+#with st.expander("Legend — what the Flags mean"):
+#    st.markdown(f"""
+#- **Truck subtypes don’t add up to total (S3):** Counts in S3a1–3 should equal S3 (when any subtype is answered).
+#- **Closeness expectations:**  
+#  • **B2=5 (or B2=5 & considered):** expect **≥{MIN_CLOSE_B2_EQ5}** (8–10).  
+#  • **B2=4** or **preferred/considered**: expect **≥{MIN_CLOSE_LO}**.
+#- **B3a (consider) ⇒ B2≥4:** Considering a brand but B2 is low.
+#- **High performance but B2 very low:** Cfunc≥{CFUNC_HIGH} with B2 in 1–2.
+#- **Straight-liner across F2/F4/F6:** Same score across all questions in all 3 sections.
+#- **S4a1 vs A3 (mapped):** 2025→A3=0, 2024→1, …, 2020→5; “2019 or earlier” ⇒ A3≥6; “Never” ⇒ no A3 purchase; “Don’t know” is skipped.
+#- **E vs B2 alignment:** E1/E4/E4c ≤2 with B2≥{B2_HIGH_MIN}, or E1/E4/E4c ≥4 with B2≤{B2_LOW_MAX}.
+#- **F1 vs E1 consistency:** If F1 is 1–2 then E1 shouldn’t be 4–5, and vice versa.
+#- **Awareness vs fleet size:** Awareness count looks high vs. fleet size (n_heavy_duty_trucks).
+#    """)
+
+# In-app color legend (dropdown view)
+with st.expander("Legend — rules & colors"):
+    st.subheader("Rule Legend")
+
+    rule_ids = sorted(RULES.keys())
+    labels = {f"Rule {rid}: {RULES[rid]['title']}": rid for rid in rule_ids}
+    choice = st.selectbox(
+        "Pick a rule to view (or show all):",
+        options=["Show all"] + list(labels.keys()),
+        index=0,
+    )
+
+    def render_rule(rid: int):
+        swatch = (
+            f"<span style='background:{RULES[rid]['color']};"
+            f"display:inline-block;width:14px;height:14px;"
+            f"border:1px solid #999;margin-right:8px;vertical-align:middle;'></span>"
+        )
+        st.markdown(
+            f"{swatch}<strong>Rule {rid} — {RULES[rid]['title']}</strong><br>"
+            f"{RULES[rid]['meaning']}",
+            unsafe_allow_html=True,
+        )
+
+    if choice == "Show all":
+        for rid in rule_ids:
+            render_rule(rid)
+    else:
+        render_rule(labels[choice])
+
+
 
 # -------------------------------------------------------------------
 # Rule # mapping and cell targeting for highlighting
@@ -1186,9 +1218,10 @@ st.markdown(
 )
 
 # In-app color legend (matches Excel)
-st.subheader("Rule Legend (colors used in Excel)")
-legend_md = []
-for rid in sorted(RULES):
-    swatch = f"<span style='background:{RULES[rid]['color']};display:inline-block;width:14px;height:14px;border:1px solid #999;margin-right:6px;vertical-align:middle;'></span>"
-    legend_md.append(f"{swatch}<strong>Rule {rid}</strong> — {RULES[rid]['title']}: {RULES[rid]['meaning']}")
-st.markdown("<br>".join(legend_md), unsafe_allow_html=True)
+#with st.expander("Legend — what the Flags mean"):
+#st.subheader("Rule Legend (colors used in Excel)")
+#legend_md = []
+#for rid in sorted(RULES):
+#    swatch = f"<span style='background:{RULES[rid]['color']};display:inline-block;width:14px;height:14px;border:1px solid #999;margin-right:6px;vertical-align:middle;'></span>"
+#    legend_md.append(f"{swatch}<strong>Rule {rid}</strong> — {RULES[rid]['title']}: {RULES[rid]['meaning']}")
+#st.markdown("<br>".join(legend_md), unsafe_allow_html=True)

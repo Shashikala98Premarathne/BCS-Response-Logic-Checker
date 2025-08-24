@@ -1,4 +1,4 @@
-# BCS Survey Logic Checker — Lite (rules-json, issues-only digest) 
+# BCS Survey Logic Checker — Lite (rules-json, issues-only digest)
 # Streamlit app that runs row-level logic checks using your column schema only.
 # Excludes last-wave, client-sample, and desk-research inputs & checks.
 
@@ -57,6 +57,37 @@ B2_HIGH_MIN     = 3               # 6/7/8) “High” B2 = 3–5
 SURVEY_YEAR = 2025                 # Set to your wave year
 S4_TO_YEAR = {1: 2025, 2: 2024, 3: 2023, 4: 2022, 5: 2021, 6: 2020}
 S4_TO_YEARS_AGO = {code: SURVEY_YEAR - yr for code, yr in S4_TO_YEAR.items()}  # {1:0, 2:1, ..., 6:5}
+
+# -------------------------------------------------------------------
+# Rule registry: numbers, short names, meanings, and colors
+# -------------------------------------------------------------------
+RULES = {
+    1:  {"title": "A2b→B3a KPI", "meaning": "Share of A2b main brand that is also in B3a.", "color": "#DDEBF7"},
+    2:  {"title": "> A1a cap", "meaning": f"Sum of A1a unaided brands > {A1A_CAP}.", "color": "#FFE0E0"},
+    3:  {"title": "A1a vs S3 high", "meaning": "Awareness count seems high vs fleet size.", "color": "#FFD7B5"},
+    4:  {"title": "C-close high bar", "meaning": "Closeness lower than expected (target ≥8).", "color": "#FFF2B2"},
+    5:  {"title": "C-close soft bar", "meaning": "Closeness a bit low (target ≥7).", "color": "#FFF8CC"},
+    6:  {"title": "B3a vs E4 (quota)", "meaning": "Considered quota make but E4 low.", "color": "#FAD7E2"},
+    7:  {"title": "Cfunc vs B2", "meaning": "High performance but B2 very low.", "color": "#E6E0FF"},
+    8:  {"title": "E4 low vs B2 high", "meaning": "Likelihood to choose low but B2 high.", "color": "#D8F3F1"},
+    9:  {"title": "E4 high vs B2 low", "meaning": "Likelihood to choose high but B2 low.", "color": "#CDE7F9"},
+    10: {"title": "A2b not in A1a", "meaning": "Main brand not listed in unaided awareness.", "color": "#E0ECFF"},
+    11: {"title": "A2a vs A4", "meaning": "Used brand but never used authorized workshop.", "color": "#E2F0D9"},
+    12: {"title": "A2b not in A2a", "meaning": "Main brand not listed in usage.", "color": "#FDE2CF"},
+    13: {"title": "B3a → B2≥4", "meaning": "Considered brand but B2 ≤3.", "color": "#FAD2E1"},
+    14: {"title": "B3b → B2≥4", "meaning": "Preferred brand but B2 ≤3.", "color": "#CDE7B0"},
+    15: {"title": "E1 high vs B2 low", "meaning": "Overall satisfaction high but B2 low.", "color": "#D1FADF"},
+    16: {"title": "E1 low vs B2 high", "meaning": "Overall satisfaction low but B2 high.", "color": "#BEE3F8"},
+    17: {"title": "E1 vs F1", "meaning": "F1 1–2 with E1 4–5, or F1 4–5 with E1 1–2.", "color": "#E5E5E5"},
+    18: {"title": "E4c low vs B2 high", "meaning": "Preference strength low but B2 high.", "color": "#D9EAD3"},
+    19: {"title": "E4c high vs B2 low", "meaning": "Preference strength high but B2 low.", "color": "#D9D2E9"},
+    20: {"title": "S4a1 ↔ A3", "meaning": "Last purchase (S4a1) doesn’t match A3.", "color": "#F6E0B5"},
+    21: {"title": "A4 vs A4b", "meaning": "Service vs parts visit differ by >3 years.", "color": "#F4CCCC"},
+    22: {"title": "Straight-liner (all 3)", "meaning": "Same score across F2/F4/F6.", "color": "#EAD1DC"},
+    23: {"title": "B1≤2 given B2", "meaning": "Familiarity very low for a rated brand.", "color": "#FCE5CD"},
+    24: {"title": "Aware but B1≤2", "meaning": "Aware but familiarity too low.", "color": "#FFF2CC"},  # (kept in legend; logic optional)
+    25: {"title": "G2 vs G1", "meaning": "Operation range unmatched for industry.", "color": "#CCE5FF"},
+}
 
 # -------------------------------------------------------------------
 # Robust file reading helpers (CSV + Excel, encoding & delimiter auto)
@@ -337,8 +368,6 @@ if COL["main_brand"] in df.columns:
         if ucol is not None and not boolish(df.at[i, ucol]):
             res.loc[i, "CHK_A2b_in_A2a"] = "Main brand not in A2a"
 
-# 7) (REMOVED) A2a→B2≥4 rule — per request
-
 # 8) If considering (B3a), B2 should be 4/5 (kept)
 if brand_cols["consider"] and brand_cols["impression"]:
     for b in brands:
@@ -362,6 +391,18 @@ if brand_cols.get("familiarity") and brand_cols.get("impression"):
             low_b1 = df[fcol].apply(lambda x: in_vals(x, [1, 2]))
             bad = has_b2 & low_b1
             res.loc[bad, f"CHK_B1_low_given_B2_b{b}"] = "Familiarity (B1) ≤ 2 despite having B2 rating"
+            
+# 24) Aware (A1a) but familiarity (B1) ≤ 2  — brand-wise
+if brand_cols.get("awareness") and brand_cols.get("familiarity"):
+    for b in brands:
+        aw   = getb(brand_cols["awareness"], b)
+        fcol = getb(brand_cols["familiarity"], b)
+        if not aw or not fcol:
+            continue
+        aware  = df[aw].apply(boolish)
+        low_b1 = df[fcol].apply(lambda x: in_vals(x, [1, 2]))
+        bad = aware & low_b1
+        res.loc[bad, f"CHK_Aware_B1_low_b{b}"] = "Aware but familiarity too low"            
 
 # 9) If preferred for next purchase (B3b single), B2 for that brand should be 4/5 (kept)
 if COL["pref_future_single"] in df.columns and brand_cols["impression"]:
@@ -375,7 +416,7 @@ if COL["pref_future_single"] in df.columns and brand_cols["impression"]:
         if not in_vals(df.at[idx, icol], [4, 5]):
             res.loc[idx, name] = "B2 should be 4/5 for preferred brand"
 
-# 10) C-close expectations (constants). Priority: (B2=5 & considered) → ≥8; else B2=5 → ≥8; else B2=4 → ≥7; else preferred/considered → ≥7
+# 10) C-close expectations (constants)
 if brand_cols["close"]:
     pref_series = df[COL["pref_future_single"]].apply(parse_brand_id) if COL.get("pref_future_single") in df.columns else None
     for b in brands:
@@ -389,11 +430,11 @@ if brand_cols["close"]:
         considered = df[cns].apply(boolish) if cns else pd.Series(False, index=df.index)
         preferred  = (pref_series == str(b)) if pref_series is not None else pd.Series(False, index=df.index)
 
-        # B2=5 & considered -> ≥8 (use special label)
+        # B2=5 & considered -> ≥8
         mask_cons_hi = (b2 == 5) & considered & ~close.isin(range(MIN_CLOSE_B2_EQ5, 11))
         res.loc[mask_cons_hi, f"CHK_Cclose_B2eq5_considered_b{b}"] = "Expect 8–10 when B2=5 & considered"
 
-        # B2=5 (remaining) -> ≥8
+        # B2=5 -> ≥8
         mask_b2_hi = (b2 == 5) & ~mask_cons_hi & ~close.isin(range(MIN_CLOSE_B2_EQ5, 11))
         res.loc[mask_b2_hi, f"CHK_Cclose_B2eq5_b{b}"] = f"Expect ≥{MIN_CLOSE_B2_EQ5}"
 
@@ -401,7 +442,7 @@ if brand_cols["close"]:
         mask_b2_lo = (b2 == 4) & ~close.isin(range(MIN_CLOSE_LO, 11))
         res.loc[mask_b2_lo, f"CHK_Cclose_B2eq4_b{b}"] = f"Expect ≥{MIN_CLOSE_LO}"
 
-        # Preferred or considered (only if not hit above) -> ≥7
+        # Preferred or considered -> ≥7
         mask_pref_cons = (~(b2 == 5)) & (~(b2 == 4)) & (preferred | considered) & ~close.isin(range(MIN_CLOSE_LO, 11))
         res.loc[mask_pref_cons, f"CHK_Cclose_pref_or_cons_b{b}"] = f"Expect ≥{MIN_CLOSE_LO}"
 
@@ -419,7 +460,7 @@ if brand_cols["cfunc"] and brand_cols["impression"]:
         bad = df.apply(misaligned, axis=1)
         res.loc[bad, f"CHK_Cfunc_vs_B2_b{b}"] = "High performance but B2 very low"
 
-# 23) Straight-liners across F2 (truck), F4 (sales/delivery), F6 (workshop) — trigger ONLY when ALL THREE are flat with the SAME score
+# 23) Straight-liners across F2 (truck), F4 (sales/delivery), F6 (workshop)
 def _section_vals(prefix: str) -> pd.DataFrame:
     cols = [c for c in df.columns if c.startswith(prefix)]
     return df[cols].apply(pd.to_numeric, errors="coerce") if cols else pd.DataFrame(index=df.index)
@@ -432,7 +473,6 @@ if not truck_vals.empty and not sales_vals.empty and not work_vals.empty:
     def flat_and_value(vals: pd.DataFrame):
         answered = vals.notna().sum(axis=1)
         flat = (answered >= 2) & (vals.nunique(axis=1) == 1)
-        # row-wise constant value
         const_val = vals.bfill(axis=1).iloc[:, 0]
         const_val[~flat] = np.nan
         return flat, const_val
@@ -457,8 +497,7 @@ if "quota_make" in df.columns and COL.get("E4_choose_brand") in df.columns and b
         mask.append(val and not e4_hi.iat[i])
     res.loc[mask, "CHK_B3a_vs_E4_quota"] = "Consider quota make but low likelihood to choose (E4)"
 
-# 37) E1 vs F1 — change spec:
-# If F1 in {1,2} then E1 should NOT be {4,5}; and vice versa.
+# 37) E1 vs F1 — change spec
 if COL["E1_overall"] in df.columns and "overall_rating_truck" in df.columns:
     e1 = to_num(df[COL["E1_overall"]])
     f1 = to_num(df["overall_rating_truck"])
@@ -468,7 +507,7 @@ if COL["E1_overall"] in df.columns and "overall_rating_truck" in df.columns:
     res.loc[bad1, "CHK_E1_F1"] = "F1 low (1–2) but E1 high (4–5)"
     res.loc[bad2, "CHK_E1_F1"] = "F1 high (4–5) but E1 low (1–2)"
 
-# 5/16) S4a1 vs A3 — MAPPED LOGIC (calendar-year bucket → years-ago)
+# S4a1 vs A3 — MAPPED LOGIC (calendar-year bucket → years-ago)
 A3_pre = "last_purchase_b"               # years ago per brand (0..99; 9/99/≥90 = never)
 A4_pre = "last_workshop_visit_b"
 A4b_pre= "last_workshop2_visit_b"
@@ -490,7 +529,6 @@ if S["LastPurchaseHD_cat"] in df.columns and A3:
     s4 = to_num(df[S["LastPurchaseHD_cat"]])  # codes 1..9
     a3_df = pd.DataFrame({b: to_num(df[c]) for b, c in A3.items()})
 
-    # robust "never" for A3 (eq 9 or >= 90)
     a3_is_never = a3_df.eq(9) | a3_df.ge(90)
     a3_is_finite = a3_df.notna() & ~a3_is_never
 
@@ -514,10 +552,9 @@ if S["LastPurchaseHD_cat"] in df.columns and A3:
     # D) S4a1 = 9 (“Never”) → no A3 should show a purchase
     mask_never = s4.eq(9)
     if mask_never.any():
-        any_claimed_purchase = a3_is_finite.any(axis=1)  # any finite “years ago” implies purchase
+        any_claimed_purchase = a3_is_finite.any(axis=1)
         ok[mask_never] = ok[mask_never] & ~any_claimed_purchase
 
-    # Record flags with specific messages
     res["CHK_S4a1_vs_A3_mapped"] = "OK"
     bad = ~ok & s4.notna()
     msgs = []
@@ -600,7 +637,7 @@ except Exception:
     st.warning("Custom rules JSON present but could not be applied. Check the Rule Builder export.")
 
 # -------------------------------------------------------------------
-# KPI: share of A2b (main brand) that is also in B3a (considered) — clear denominators
+# KPI: share of A2b (main brand) that is also in B3a (considered)
 # -------------------------------------------------------------------
 if COL["main_brand"] in df.columns and brand_cols["consider"]:
     mb = df[COL["main_brand"]].apply(parse_brand_id)
@@ -663,6 +700,7 @@ FRIENDLY = {
     "Main brand not in A1a": "Main brand not listed in unaided awareness.",
     "Main brand not in A2a": "Main brand not listed in usage.",
     "Used brand but never used workshop": "Used brand but never used authorized workshop.",
+     "Aware but familiarity too low": "Aware but familiarity too low.",
     "F1 low (1–2) but E1 high (4–5)": "Truck rating low but overall satisfaction high.",
     "F1 high (4–5) but E1 low (1–2)": "Truck rating high but overall satisfaction low.",
     "E1 high but B2 low":  "Overall satisfaction (E1) high but overall impression (B2) low.",
@@ -676,7 +714,6 @@ FRIENDLY = {
     f"Expect ≥{MIN_CLOSE_B2_EQ5}": f"Closeness is lower than expected (target ≥{MIN_CLOSE_B2_EQ5}).",
     f"Expect ≥{MIN_CLOSE_LO}": f"Closeness is a bit low (target ≥{MIN_CLOSE_LO}).",
     "Expect 8–10 when B2=5 & considered": "Closeness should be 8–10 when B2=5 and brand is considered.",
-    # S4 mapped messages will pass through verbatim (custom per-row text)
 }
 
 def _human_list(prefix: str, items: list[str], show=4) -> str:
@@ -833,6 +870,110 @@ with st.expander("Legend — what the Flags mean"):
     """)
 
 # -------------------------------------------------------------------
+# Rule # mapping and cell targeting for highlighting
+# -------------------------------------------------------------------
+_BRAND_IN_CHK = re.compile(r"_b(\d+)$")
+
+def _rule_id_for_flag(chk_col: str, val: str) -> int | None:
+    # A1a total: decide Rule 2 vs Rule 3 by message text
+    if chk_col == "CHK_A1a_total_flag":
+        if isinstance(val, str) and "Too many brands vs fleet size" in val:
+            return 3
+        if isinstance(val, str) and val.startswith(">"):
+            return 2
+        return None
+
+    patterns = [
+        (r"^CHK_B2_for_consider_b\d+$", 13),
+        (r"^CHK_B2_for_pref_b\d+$",     14),
+        (r"^CHK_Cclose_B2eq5.*_b\d+$",  4),
+        (r"^CHK_Cclose_B2eq4_b\d+$",    5),
+        (r"^CHK_Cclose_pref_or_cons_b\d+$", 5),
+        (r"^CHK_Cfunc_vs_B2_b\d+$",     7),
+        (r"^CHK_A4_never_b\d+$",        11),
+        (r"^CHK_A4_vs_A4b_gap_b\d+$",   21),
+        (r"^CHK_B1_low_given_B2_b\d+$", 23),
+        (r"^CHK_straightliner_all_F2F4F6$", 22),
+        (r"^CHK_Aware_B1_low_b\d+$", 24),
+        (r"^CHK_A2b_in_A1a$",           10),
+        (r"^CHK_A2b_in_A2a$",           12),
+        (r"^CHK_B3a_vs_E4_quota$",      6),
+        (r"^CHK_E1_F1$",                17),
+        (r"^CHK_E1_high_vs_B2_low$",    15),
+        (r"^CHK_E1_low_vs_B2_high$",    16),
+        (r"^CHK_E4_high_vs_B2_low$",    9),
+        (r"^CHK_E4_low_vs_B2_high$",    8),
+        (r"^CHK_E4c_high_vs_B2_low$",   19),
+        (r"^CHK_E4c_low_vs_B2_high$",   18),
+        (r"^CHK_S4a1_vs_A3_mapped$",    20),
+        (r"^CHK_G2_vs_G1$",             25),
+        (r"^CHK_S3a_sum$",              None),  # optional to color or not
+    ]
+    for pat, rid in patterns:
+        if re.fullmatch(pat, chk_col):
+            return rid
+    return None
+
+def _targets_for_flag(chk_col: str, row_i: int) -> list[str]:
+    m = _BRAND_IN_CHK.search(chk_col)
+    brand = m.group(1) if m else None
+
+    def bcol(block: str, b: str | None) -> str | None:
+        return brand_cols.get(block, {}).get(b) if (b and brand_cols.get(block)) else None
+
+    targets: list[str] = []
+
+    # Brand-level rules
+    if chk_col.startswith("CHK_B2_for_consider_b"):
+        targets += [bcol("impression", brand), bcol("consider", brand)]
+    elif chk_col.startswith("CHK_B2_for_pref_b"):
+        targets += [bcol("impression", brand)]
+    elif chk_col.startswith("CHK_Cclose_"):
+        targets += [bcol("close", brand)]
+    elif chk_col.startswith("CHK_Cfunc_vs_B2_b"):
+        targets += [bcol("cfunc", brand), bcol("impression", brand)]
+    elif chk_col.startswith("CHK_B1_low_given_B2_b"):
+        targets += [bcol("familiarity", brand)]
+    elif chk_col.startswith("CHK_A4_never_b"):
+        targets += [bcol("usage", brand)]
+        ws = f"last_workshop_visit_b{brand}"
+        if ws in res.columns: targets += [ws]
+    elif chk_col.startswith("CHK_Aware_B1_low_b"):
+        targets += [bcol("familiarity", brand)]  # (optionally also add bcol("awareness", brand))
+    elif chk_col.startswith("CHK_A4_vs_A4b_gap_b"):
+        s = f"last_workshop_visit_b{brand}"
+        p = f"last_workshop2_visit_b{brand}"
+        if s in res.columns: targets += [s]
+        if p in res.columns: targets += [p]
+
+    # Non-brand rules
+    elif chk_col == "CHK_A2b_in_A1a" or chk_col == "CHK_A2b_in_A2a":
+        if COL["main_brand"] in res.columns: targets += [COL["main_brand"]]
+    elif chk_col == "CHK_B3a_vs_E4_quota":
+        if COL.get("E4_choose_brand") in res.columns: targets += [COL["E4_choose_brand"]]
+    elif chk_col == "CHK_E1_F1":
+        if COL.get("E1_overall") in res.columns: targets += [COL["E1_overall"]]
+        if "overall_rating_truck" in res.columns: targets += ["overall_rating_truck"]
+    elif chk_col in {"CHK_E1_high_vs_B2_low","CHK_E1_low_vs_B2_high"}:
+        if COL.get("E1_overall") in res.columns: targets += [COL["E1_overall"]]
+    elif chk_col in {"CHK_E4_high_vs_B2_low","CHK_E4_low_vs_B2_high"}:
+        if COL.get("E4_choose_brand") in res.columns: targets += [COL["E4_choose_brand"]]
+    elif chk_col in {"CHK_E4c_high_vs_B2_low","CHK_E4c_low_vs_B2_high"}:
+        if COL.get("E4c_pref_strength") in res.columns: targets += [COL["E4c_pref_strength"]]
+    elif chk_col == "CHK_S4a1_vs_A3_mapped":
+        if S["LastPurchaseHD_cat"] in res.columns: targets += [S["LastPurchaseHD_cat"]]
+    elif chk_col == "CHK_S3a_sum":
+        for k in [S["HD_count"], S["Tractors"], S["Rigids"], S["Tippers"]]:
+            if k in res.columns: targets += [k]
+    elif chk_col == "CHK_A1a_total_flag":
+        for k in ["CHK_A1a_total_flag","CHK_A1a_total_count"]:
+            if k in res.columns: targets += [k]
+    elif chk_col == "CHK_straightliner_all_F2F4F6":
+        targets += [c for c in res.columns if c.startswith(("truck_rating_","salesdelivery_rating_","workshop_rating_"))]
+
+    return [c for c in targets if c and (c in res.columns)]
+
+# -------------------------------------------------------------------
 # Excel + CSV exports
 # -------------------------------------------------------------------
 def _autofit(ws, data_df):
@@ -882,9 +1023,10 @@ def build_excel(digest_df: pd.DataFrame, detail_df: pd.DataFrame, full_df: pd.Da
             _autofit(writer.sheets["Full_Table"], full_df)
 
         if "Consistency_Check" in digest_df.columns:
+            from xlsxwriter.utility import xl_col_to_name
             cc_idx = list(digest_df.columns).index("Consistency_Check")
             nrows = max(len(digest_df), 1)
-            col_letter = xlsxwriter.utility.xl_col_to_name(cc_idx)
+            col_letter = xl_col_to_name(cc_idx)
             rng = f"{col_letter}2:{col_letter}{nrows+1}"
             bold = wb.add_format({"bold": True})
             wrap = wb.add_format({"text_wrap": True})
@@ -929,6 +1071,81 @@ def build_issues_only_excel(detail_df: pd.DataFrame) -> BytesIO | None:
     out.seek(0)
     return out
 
+# NEW: Full dataset with color-coded highlights + hover "Rule #"
+def build_full_highlighted_excel(full_df: pd.DataFrame) -> BytesIO | None:
+    try:
+        import xlsxwriter  # noqa: F401
+    except Exception:
+        st.error("Excel export needs the 'xlsxwriter' package.")
+        return None
+
+    chk_cols_local = [c for c in full_df.columns if c.startswith("CHK_")]
+    cell_rules: dict[tuple[int, str], set[int]] = {}
+
+    # collect cells to color
+    for idx, row in full_df.iterrows():
+        for chk in chk_cols_local:
+            val = row.get(chk, "")
+            if not isinstance(val, str) or val in ("", "OK") or pd.isna(val):
+                continue
+            rid = _rule_id_for_flag(chk, val)
+            if rid is None:
+                continue
+            for tgt in _targets_for_flag(chk, idx):
+                cell_rules.setdefault((idx, tgt), set()).add(rid)
+
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+        full_df.to_excel(writer, index=False, sheet_name="Data")
+        wb = writer.book
+        ws = writer.sheets["Data"]
+
+        # formats per rule
+        rule_formats = {rid: wb.add_format({"bg_color": meta["color"]}) for rid, meta in RULES.items()}
+
+        cols = list(full_df.columns)
+        # apply color + comments
+        for (ridx, colname), rids in cell_rules.items():
+            if colname not in full_df.columns:
+                continue
+            cidx = cols.index(colname)
+            # map DataFrame index to row number in sheet (header row offset)
+            excel_r = int(list(full_df.index).index(ridx)) + 1
+            excel_c = cidx
+            first_rid = sorted(rids)[0]
+            fmt = rule_formats.get(first_rid)
+            val = full_df.at[ridx, colname]
+            if pd.isna(val):
+                ws.write_blank(excel_r, excel_c, None, fmt)
+            else:
+                ws.write(excel_r, excel_c, val, fmt)
+            ws.write_comment(excel_r, excel_c, "; ".join([f"Rule {x}" for x in sorted(rids)]), {"visible": False})
+
+        # tidy columns
+        for i, col in enumerate(cols):
+            try:
+                max_len = int(max(full_df[col].astype(str).map(len).max(), len(col))) + 2
+            except ValueError:
+                max_len = len(col) + 2
+            ws.set_column(i, i, min(max_len, 60))
+        ws.freeze_panes(1, 0)
+        ws.autofilter(0, 0, max(len(full_df), 1), max(len(cols) - 1, 0))
+
+        # legend sheet
+        legend_cols = ["Rule", "Title", "Meaning", "Color"]
+        legend_rows = [[f"Rule {rid}", RULES[rid]["title"], RULES[rid]["meaning"], ""] for rid in sorted(RULES)]
+        legend_df = pd.DataFrame(legend_rows, columns=legend_cols)
+        legend_df.to_excel(writer, index=False, sheet_name="Legend")
+        wsl = writer.sheets["Legend"]
+        for i, rid in enumerate(sorted(RULES)):
+            fill = wb.add_format({"bg_color": RULES[rid]["color"]})
+            wsl.write(i+1, 3, "", fill)
+        for i, col in enumerate(legend_cols):
+            wsl.set_column(i, i, max(12, len(col) + 2))
+
+    out.seek(0)
+    return out
+
 # CSV + Excel downloads
 digest_csv = filtered_digest.to_csv(index=False).encode("utf-8-sig")
 st.download_button("💾 Download issues digest (CSV)", digest_csv,
@@ -948,6 +1165,16 @@ if issues_only_bytes is not None:
                        file_name="issues_only.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+# NEW: Full dataset with color-coded highlights (Data + Legend)
+full_highlight_bytes = build_full_highlighted_excel(res)
+if full_highlight_bytes is not None:
+    st.download_button(
+        "📗 Download FULL dataset with highlights (Excel)",
+        data=full_highlight_bytes.getvalue(),
+        file_name="full_dataset_highlighted.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
 st.markdown("---")
 st.markdown(
     "**Checks included:** S3a sum to S3; A1a cap (>7) + A1a vs S3 sanity; "
@@ -957,3 +1184,11 @@ st.markdown(
     "usage but never workshop; A4 vs A4b >3y; G2 vs G1; quota B3a vs E4. "
     "**+ Optional custom rules JSON.**"
 )
+
+# In-app color legend (matches Excel)
+st.subheader("Rule Legend (colors used in Excel)")
+legend_md = []
+for rid in sorted(RULES):
+    swatch = f"<span style='background:{RULES[rid]['color']};display:inline-block;width:14px;height:14px;border:1px solid #999;margin-right:6px;vertical-align:middle;'></span>"
+    legend_md.append(f"{swatch}<strong>Rule {rid}</strong> — {RULES[rid]['title']}: {RULES[rid]['meaning']}")
+st.markdown("<br>".join(legend_md), unsafe_allow_html=True)

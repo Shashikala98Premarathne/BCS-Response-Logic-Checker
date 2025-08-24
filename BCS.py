@@ -1178,10 +1178,12 @@ def build_full_highlighted_excel(full_df: pd.DataFrame) -> BytesIO | None:
     out.seek(0)
     return out
 
+
+
 # CSV + Excel downloads
-digest_csv = filtered_digest.to_csv(index=False).encode("utf-8-sig")
-st.download_button("💾 Download issues digest (CSV)", digest_csv,
-                   file_name="bcs_issues_digest.csv", mime="text/csv")
+#digest_csv = filtered_digest.to_csv(index=False).encode("utf-8-sig")
+#st.download_button("💾 Download issues digest (CSV)", digest_csv,
+#                   file_name="bcs_issues_digest.csv", mime="text/csv")
 
 excel_bytes = build_excel(filtered_digest, issues_long, res if show_full else None)
 if excel_bytes is not None:
@@ -1196,6 +1198,22 @@ if issues_only_bytes is not None:
                        data=issues_only_bytes.getvalue(),
                        file_name="issues_only.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    
+# New: full dataset (original columns) with color-coded highlights
+#orig_highlight_xlsx = build_original_with_highlights(df, res, brand_cols)
+#if orig_highlight_xlsx is not None:
+#    st.download_button("📗 Download FULL dataset — original dataset with highlights",
+#                       data=orig_highlight_xlsx.getvalue(),
+#                       file_name="dataset_highlighted.xlsx",
+#                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# Existing summary workbook (issues sheets, optional full table)
+#excel_bytes = build_excel(filtered_digest, issues_long, res if show_full else None)
+#if excel_bytes is not None:
+#    st.download_button("📘 Download Issues-only Excel (Summary)",
+#                       data=excel_bytes.getvalue(),
+#                       file_name="logic_issues.xlsx",
+#                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")    
 
 # NEW: Full dataset with color-coded highlights (Data + Legend)
 full_highlight_bytes = build_full_highlighted_excel(res)
@@ -1206,6 +1224,7 @@ if full_highlight_bytes is not None:
         file_name="full_dataset_highlighted.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
 
 st.markdown("---")
 st.markdown(

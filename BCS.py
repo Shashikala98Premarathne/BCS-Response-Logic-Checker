@@ -1178,6 +1178,97 @@ def build_full_highlighted_excel(full_df: pd.DataFrame) -> BytesIO | None:
     out.seek(0)
     return out
 
+def build_original_with_highlights(orig_df: pd.DataFrame,
+                                   res_df: pd.DataFrame,
+                                   keep_chk: set[str] = {"CHK_A1a_total_count", "CHK_A1a_total_flag"}) -> BytesIO | None:
+    """
+    Create an Excel file with ONLY the original columns + selected CHK columns (keep_chk),
+    but still color cells (and add 'Rule #' comments) based on the internal res_df flags.
+    """
+    try:
+        import xlsxwriter  # noqa: F401
+    except Exception:
+        st.error("Excel export needs the 'xlsxwriter' package.")
+        return None
+
+    # Compose the output table: original columns + the two CHK aggregates (if present)
+    out_df = orig_df.copy()
+    for k in keep_chk:
+        if k in res_df.columns:
+            out_df[k] = res_df[k]
+
+    # Build map of (row_idx, col_name) -> set(rule_ids) using res_df (full logic space)
+    chk_cols_local = [c for c in res_df.columns if c.startswith("CHK_")]
+    cell_rules: dict[tuple[int, str], set[int]] = {}
+    for ridx, row in res_df.iterrows():
+        for chk in chk_cols_local:
+            val = row.get(chk, "")
+            if not isinstance(val, str) or val in ("", "OK") or pd.isna(val):
+                continue
+            rid = _rule_id_for_flag(chk, val)
+            if rid is None:
+                continue
+            # Targets from the res_df world, then filter to what exists in out_df
+            tgts = [c for c in _targets_for_flag(chk, ridx) if c in out_df.columns]
+            for tgt in tgts:
+                cell_rules.setdefault((ridx, tgt), set()).add(rid)
+
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+        out_df.to_excel(writer, index=False, sheet_name="Data")
+        wb = writer.book
+        ws = writer.sheets["Data"]
+
+        # Pre-create formats per rule (background color only)
+        rule_formats = {rid: wb.add_format({"bg_color": meta["color"]}) for rid, meta in RULES.items()}
+
+        cols = list(out_df.columns)
+        row_pos = {idx: i for i, idx in enumerate(out_df.index)}  # fast index→row lookup
+
+        # Safe writer to avoid NaN/Inf errors
+        def _write_safe(r: int, c: int, v, fmt=None):
+            if pd.isna(v):
+                ws.write_blank(r, c, None, fmt)
+            elif isinstance(v, (int, float, np.integer, np.floating)) and not np.isfinite(v):
+                ws.write_string(r, c, str(v), fmt)  # handle inf/-inf
+            else:
+                ws.write(r, c, v, fmt)
+
+        # Paint cells and attach hover comments "Rule X; Rule Y"
+        for (ridx, colname), rids in cell_rules.items():
+            if colname not in out_df.columns or ridx not in row_pos:
+                continue
+            excel_r = row_pos[ridx] + 1  # +1 for header
+            excel_c = cols.index(colname)
+            v = out_df.at[ridx, colname]
+            fmt = rule_formats.get(sorted(rids)[0])
+            _write_safe(excel_r, excel_c, v, fmt)
+            ws.write_comment(excel_r, excel_c, "; ".join([f"Rule {x}" for x in sorted(rids)]), {"visible": False})
+
+        # Neaten the sheet
+        for i, col in enumerate(cols):
+            try:
+                max_len = int(max(out_df[col].astype(str).map(len).max(), len(col))) + 2
+            except ValueError:
+                max_len = len(col) + 2
+            ws.set_column(i, i, min(max_len, 60))
+        ws.freeze_panes(1, 0)
+        ws.autofilter(0, 0, max(len(out_df), 1), max(len(cols) - 1, 0))
+
+        # Legend sheet (same as your full builder)
+        legend_cols = ["Rule", "Title", "Meaning", "Color"]
+        legend_rows = [[f"Rule {rid}", RULES[rid]["title"], RULES[rid]["meaning"], ""] for rid in sorted(RULES)]
+        legend_df = pd.DataFrame(legend_rows, columns=legend_cols)
+        legend_df.to_excel(writer, index=False, sheet_name="Legend")
+        wsl = writer.sheets["Legend"]
+        for i, rid in enumerate(sorted(RULES)):
+            fill = wb.add_format({"bg_color": RULES[rid]["color"]})
+            wsl.write(i+1, 3, "", fill)
+        for i, col in enumerate(legend_cols):
+            wsl.set_column(i, i, max(12, len(col) + 2))
+
+    out.seek(0)
+    return out
 
 
 # CSV + Excel downloads
@@ -1215,15 +1306,28 @@ if issues_only_bytes is not None:
 #                       file_name="logic_issues.xlsx",
 #                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")    
 
-# NEW: Full dataset with color-coded highlights (Data + Legend)
-full_highlight_bytes = build_full_highlighted_excel(res)
-if full_highlight_bytes is not None:
+# ORIGINAL dataset + highlights (only original cols + A1a totals)
+orig_only_bytes = build_original_with_highlights(df, res)
+if orig_only_bytes is not None:
     st.download_button(
-        "📗 Download FULL dataset with highlights (Excel)",
-        data=full_highlight_bytes.getvalue(),
-        file_name="full_dataset_highlighted.xlsx",
+        "📗 Download ORIGINAL dataset with highlights (Excel)",
+        data=orig_only_bytes.getvalue(),
+        file_name="original_dataset_highlighted.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+
+
+# NEW: Full dataset with color-coded highlights (Data + Legend)
+#full_highlight_bytes = build_full_highlighted_excel(res)
+#if full_highlight_bytes is not None:
+#    st.download_button(
+#        "📗 Download FULL dataset with highlights (Excel)",
+#        data=full_highlight_bytes.getvalue(),
+#        file_name="full_dataset_highlighted.xlsx",
+#        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+#    )
 
 
 st.markdown("---")

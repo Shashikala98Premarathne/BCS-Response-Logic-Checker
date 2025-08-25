@@ -338,7 +338,7 @@ if all(k in df.columns for k in [S["HD_count"], S["Tractors"], S["Rigids"], S["T
     res["CHK_S3a_sum"] = "OK"
     res.loc[has_any_s3a & total.notna() & (subsum != total), "CHK_S3a_sum"] = "S3a1-3 ≠ S3"
 
-# 3) A1a total sanity (merged cap + S3 sanity)
+# 3) Rule 2/Rule 3: A1a total sanity (merged cap + S3 sanity)
 aw_cols = list(brand_cols["awareness"].values())
 if aw_cols:
     sel_aw = df[aw_cols].applymap(boolish)
@@ -353,7 +353,7 @@ if aw_cols:
         over_s3 = count_aw > allowed
         res.loc[over_s3, "CHK_A1a_total_flag"] = "Too many brands vs fleet size"
 
-# 4) Main make (A2b) must be in A1a and A2a (kept)
+# 4) Rule 10/ Rule 12: Main make (A2b) must be in A1a and A2a (kept)
 if COL["main_brand"] in df.columns:
     res["CHK_A2b_in_A1a"] = "OK"
     res["CHK_A2b_in_A2a"] = "OK"
@@ -368,7 +368,7 @@ if COL["main_brand"] in df.columns:
         if ucol is not None and not boolish(df.at[i, ucol]):
             res.loc[i, "CHK_A2b_in_A2a"] = "Main brand not in A2a"
 
-# 8) If considering (B3a), B2 should be 4/5 (kept)
+# 8) Rule 13: If considering (B3a), B2 should be 4/5 (kept)
 if brand_cols["consider"] and brand_cols["impression"]:
     for b in brands:
         ccol = getb(brand_cols["consider"], b)
@@ -381,7 +381,7 @@ if brand_cols["consider"] and brand_cols["impression"]:
         res[name] = "OK"
         res.loc[bad, name] = "B2 should be 4/5"
 
-# 8b) Familiarity: if there is a B2 rating for the brand AND B1 ≤ 2 → flag
+# 8b) Rule 23: Familiarity: if there is a B2 rating for the brand AND B1 ≤ 2 → flag
 if brand_cols.get("familiarity") and brand_cols.get("impression"):
     for b in brands:
         fcol = getb(brand_cols["familiarity"], b)
@@ -392,7 +392,7 @@ if brand_cols.get("familiarity") and brand_cols.get("impression"):
             bad = has_b2 & low_b1
             res.loc[bad, f"CHK_B1_low_given_B2_b{b}"] = "Familiarity (B1) ≤ 2 despite having B2 rating"
             
-# 24) Aware (A1a) but familiarity (B1) ≤ 2  — brand-wise
+# 24) Rule 24: Aware (A1a) but familiarity (B1) ≤ 2  — brand-wise
 if brand_cols.get("awareness") and brand_cols.get("familiarity"):
     for b in brands:
         aw   = getb(brand_cols["awareness"], b)
@@ -404,7 +404,7 @@ if brand_cols.get("awareness") and brand_cols.get("familiarity"):
         bad = aware & low_b1
         res.loc[bad, f"CHK_Aware_B1_low_b{b}"] = "Aware but familiarity too low"            
 
-# 9) If preferred for next purchase (B3b single), B2 for that brand should be 4/5 (kept)
+# 9) Rule 14: If preferred for next purchase (B3b single), B2 for that brand should be 4/5 (kept)
 if COL["pref_future_single"] in df.columns and brand_cols["impression"]:
     pref = df[COL["pref_future_single"]].apply(parse_brand_id)
     for idx, b in pref.items():
@@ -416,7 +416,7 @@ if COL["pref_future_single"] in df.columns and brand_cols["impression"]:
         if not in_vals(df.at[idx, icol], [4, 5]):
             res.loc[idx, name] = "B2 should be 4/5 for preferred brand"
 
-# 10) C-close expectations (constants)
+# 10) Rule 4/Rule 5: C-close expectations (constants)
 if brand_cols["close"]:
     pref_series = df[COL["pref_future_single"]].apply(parse_brand_id) if COL.get("pref_future_single") in df.columns else None
     for b in brands:
@@ -446,7 +446,7 @@ if brand_cols["close"]:
         mask_pref_cons = (~(b2 == 5)) & (~(b2 == 4)) & (preferred | considered) & ~close.isin(range(MIN_CLOSE_LO, 11))
         res.loc[mask_pref_cons, f"CHK_Cclose_pref_or_cons_b{b}"] = f"Expect ≥{MIN_CLOSE_LO}"
 
-# 11) Cfunc vs B2 alignment: B2 ≤ 2 AND Cfunc ≥ 7
+# 11) Rule 7: Cfunc vs B2 alignment: B2 ≤ 2 AND Cfunc ≥ 7
 if brand_cols["cfunc"] and brand_cols["impression"]:
     for b in brands:
         cf = getb(brand_cols["cfunc"], b)
@@ -460,7 +460,7 @@ if brand_cols["cfunc"] and brand_cols["impression"]:
         bad = df.apply(misaligned, axis=1)
         res.loc[bad, f"CHK_Cfunc_vs_B2_b{b}"] = "High performance but B2 very low"
 
-# 23) Straight-liners across F2 (truck), F4 (sales/delivery), F6 (workshop)
+# 23) Rule 22: Straight-liners across F2 (truck), F4 (sales/delivery), F6 (workshop)
 def _section_vals(prefix: str) -> pd.DataFrame:
     cols = [c for c in df.columns if c.startswith(prefix)]
     return df[cols].apply(pd.to_numeric, errors="coerce") if cols else pd.DataFrame(index=df.index)
@@ -484,7 +484,7 @@ if not truck_vals.empty and not sales_vals.empty and not work_vals.empty:
     all_flat_same = t_flat & s_flat & w_flat & (t_v == s_v) & (t_v == w_v)
     res.loc[all_flat_same, "CHK_straightliner_all_F2F4F6"] = "Straight-liner — same score across truck, sales & delivery, and workshop"
 
-# 24) Consider (B3a) vs E4 for quota_make (kept, light sanity)
+# 24) Rule 6: Consider (B3a) vs E4 for quota_make (kept, light sanity)
 if "quota_make" in df.columns and COL.get("E4_choose_brand") in df.columns and brand_cols["consider"]:
     qm = df["quota_make"].apply(parse_brand_id)
     e4_hi = df[COL["E4_choose_brand"]].apply(lambda x: in_vals(x, [4, 5]))
@@ -497,7 +497,7 @@ if "quota_make" in df.columns and COL.get("E4_choose_brand") in df.columns and b
         mask.append(val and not e4_hi.iat[i])
     res.loc[mask, "CHK_B3a_vs_E4_quota"] = "Consider quota make but low likelihood to choose (E4)"
 
-# 37) E1 vs F1 — change spec
+# 37) Rule 17: E1 vs F1 — change spec
 if COL["E1_overall"] in df.columns and "overall_rating_truck" in df.columns:
     e1 = to_num(df[COL["E1_overall"]])
     f1 = to_num(df["overall_rating_truck"])
@@ -507,7 +507,7 @@ if COL["E1_overall"] in df.columns and "overall_rating_truck" in df.columns:
     res.loc[bad1, "CHK_E1_F1"] = "F1 low (1–2) but E1 high (4–5)"
     res.loc[bad2, "CHK_E1_F1"] = "F1 high (4–5) but E1 low (1–2)"
 
-# S4a1 vs A3 — MAPPED LOGIC (calendar-year bucket → years-ago)
+# Rule 20: S4a1 vs A3 — MAPPED LOGIC (calendar-year bucket → years-ago)
 A3_pre = "last_purchase_b"               # years ago per brand (0..99; 9/99/≥90 = never)
 A4_pre = "last_workshop_visit_b"
 A4b_pre= "last_workshop2_visit_b"
@@ -573,7 +573,7 @@ if S["LastPurchaseHD_cat"] in df.columns and A3:
     for i, m in msgs:
         res.loc[i, "CHK_S4a1_vs_A3_mapped"] = m
 
-# Usage but never used authorised workshop (A4 = 99) — kept
+# Rule 11: Usage but never used authorised workshop (A4 = 99) — kept
 if A4 and brand_cols["usage"]:
     for b in brands:
         ucol = getb(brand_cols["usage"], b)
@@ -583,7 +583,7 @@ if A4 and brand_cols["usage"]:
         never_ws = to_num(df[wcol]) == 99
         res.loc[used & never_ws, f"CHK_A4_never_b{b}"] = "Used brand but never used workshop"
 
-# A4 vs A4b gap (>3y), excluding 99 — kept
+# Rule 21: A4 vs A4b gap (>3y), excluding 99 — kept
 for b in brands:
     s = A4.get(b); p = A4b.get(b)
     if not s or not p: continue
@@ -591,7 +591,7 @@ for b in brands:
     mask = sv.notna() & pv.notna() & (sv != 99) & (pv != 99) & ((sv - pv).abs() > 3)
     res.loc[mask, f"CHK_A4_vs_A4b_gap_b{b}"] = ">3y gap between service and parts visits"
 
-# E1/E4/E4c vs B2 alignment for quota make (updated cutoffs: B2 high≥3, low≤2)
+# Rule 8,9/ Rule 15,16/ Rule 18,19: E1/E4/E4c vs B2 alignment for quota make (updated cutoffs: B2 high≥3, low≤2)
 if "quota_make" in df.columns:
     qm = df["quota_make"].apply(parse_brand_id)
     for i, b in qm.items():
@@ -637,7 +637,7 @@ except Exception:
     st.warning("Custom rules JSON present but could not be applied. Check the Rule Builder export.")
 
 # -------------------------------------------------------------------
-# KPI: share of A2b (main brand) that is also in B3a (considered)
+# Rule 1: KPI: share of A2b (main brand) that is also in B3a (considered)
 # -------------------------------------------------------------------
 if COL["main_brand"] in df.columns and brand_cols["consider"]:
     mb = df[COL["main_brand"]].apply(parse_brand_id)
